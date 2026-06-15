@@ -17,6 +17,7 @@ pub struct SelectPopupGeometry {
     pub x: f32,
     pub y: f32,
     pub width: f32,
+    #[allow(dead_code)]
     pub height: f32,
     pub options: Vec<PopupOption>,
     pub selected_index: Option<usize>,
@@ -25,6 +26,7 @@ pub struct SelectPopupGeometry {
 
 #[derive(Debug, Clone)]
 pub struct PopupOption {
+    #[allow(dead_code)]
     pub label: String,
     pub disabled: bool,
 }
@@ -38,6 +40,7 @@ impl SelectPopupGeometry {
     }
 
     /// Get the bounds for a specific option in the popup (x, y, width, height).
+    #[allow(dead_code)]
     pub fn option_bounds(&self, index: usize) -> Option<(f32, f32, f32, f32)> {
         if index >= self.options.len() {
             return None;
@@ -73,6 +76,7 @@ pub struct SelectOption {
     pub value: String,
     pub label: String,
     pub disabled: bool,
+    #[allow(dead_code)]
     pub selected: bool,
 }
 
@@ -93,6 +97,7 @@ pub struct SelectState {
     pub options: Vec<SelectOption>,
     pub selected_index: Option<usize>,
     pub disabled: bool,
+    #[allow(dead_code)]
     pub name: Option<String>,
     pub open: bool,
     pub active_index: Option<usize>,
@@ -118,10 +123,12 @@ impl SelectState {
             .map(|opt| opt.value.clone())
     }
 
+    #[allow(dead_code)]
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
 
+    #[allow(dead_code)]
     pub fn set_name(&mut self, name: Option<String>) {
         self.name = name;
     }

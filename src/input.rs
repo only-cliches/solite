@@ -108,6 +108,7 @@ impl Default for InputState {
     }
 }
 
+#[allow(dead_code)]
 impl InputState {
     pub fn value(&self) -> &str {
         &self.value
@@ -185,6 +186,7 @@ impl InputState {
         matches!(self.input_type, InputType::Radio)
     }
 
+    #[allow(dead_code)]
     pub fn is_checkbox(&self) -> bool {
         matches!(self.input_type, InputType::Checkbox)
     }
@@ -305,6 +307,7 @@ impl InputState {
         self.numeric_value().unwrap_or(default)
     }
 
+    #[allow(dead_code)]
     pub fn is_password(&self) -> bool {
         self.input_type == InputType::Password
     }
@@ -397,6 +400,7 @@ impl InputState {
         true
     }
 
+    #[allow(dead_code)]
     pub fn commit_numeric_preview(&mut self, preview: String) -> bool {
         if self.readonly || self.disabled {
             return false;
@@ -414,6 +418,7 @@ impl InputState {
         true
     }
 
+    #[allow(dead_code)]
     pub fn set_numeric_value_from_text(&mut self, text: &str) -> bool {
         if self.readonly || self.disabled {
             return false;
@@ -438,6 +443,7 @@ impl InputState {
         }
     }
 
+    #[allow(dead_code)]
     pub fn update_range_value(&mut self, raw: &str) -> bool {
         if self.input_type == InputType::Range {
             self.set_numeric_value_from_text(raw)
@@ -446,6 +452,7 @@ impl InputState {
         }
     }
 
+    #[allow(dead_code)]
     pub fn insert_numeric_str(&mut self, text: &str) -> bool {
         if self.readonly || self.disabled {
             return false;
@@ -474,6 +481,7 @@ impl InputState {
         end
     }
 
+    #[allow(dead_code)]
     pub fn selection_byte_range(&self) -> (usize, usize) {
         let (start, end) = self.selection_range();
         (self.byte_index_of(start), self.byte_index_of(end))
@@ -484,6 +492,7 @@ impl InputState {
             .is_some_and(|anchor| anchor != self.caret_chars)
     }
 
+    #[allow(dead_code)]
     pub fn selected_text(&self) -> Option<String> {
         let (start, end) = self.selection_range();
         (start != end)
@@ -536,6 +545,7 @@ impl InputState {
         self.placeholder = placeholder;
     }
 
+    #[allow(dead_code)]
     pub fn set_masked(&mut self, masked: bool) {
         self.masked = masked;
     }
@@ -544,6 +554,7 @@ impl InputState {
         self.readonly = readonly;
     }
 
+    #[allow(dead_code)]
     pub fn readonly(&self) -> bool {
         self.readonly
     }

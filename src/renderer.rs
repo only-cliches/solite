@@ -183,8 +183,9 @@ fn paint_select_popups<S: PaintScene>(
     let border_color = peniko::Color::from_rgba8(128, 128, 128, 255);
     let selected_bg = peniko::Color::from_rgba8(200, 220, 255, 255);
     let hover_bg = peniko::Color::from_rgba8(220, 235, 255, 255);
-    let text_color = peniko::Color::from_rgba8(0, 0, 0, 255);
-    let disabled_text = peniko::Color::from_rgba8(128, 128, 128, 255);
+    // TODO: Text rendering not yet implemented; these colors reserved for future use
+    let _text_color = peniko::Color::from_rgba8(0, 0, 0, 255);
+    let _disabled_text = peniko::Color::from_rgba8(128, 128, 128, 255);
 
     for popup in popups {
         let option_height = 24.0;
@@ -223,7 +224,7 @@ fn paint_select_popups<S: PaintScene>(
         );
 
         // Draw options
-        for (i, option) in popup.options.iter().enumerate() {
+        for (i, _option) in popup.options.iter().enumerate() {
             let y = popup.y + vertical_padding + (i as f32 * option_height);
             let option_rect = Rect::new(
                 popup.x as f64,
