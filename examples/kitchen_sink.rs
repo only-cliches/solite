@@ -12,6 +12,7 @@ mod blit;
 mod capture;
 
 use blit::{BlitContext, BlitDraw};
+use blitz_traits::shell::{ClipboardError, ShellProvider};
 #[cfg(feature = "jsx-compiler")]
 use oxide_dom::compile_component_file;
 use oxide_dom::{
@@ -22,13 +23,13 @@ use winit::application::ApplicationHandler;
 use winit::event::KeyEvent;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, NamedKey, PhysicalKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 const PROJECT_NAME: &str = "oxide-dom-kitchen-sink";
 const TARGET_LABELS: [&str; 3] = ["Left Target", "Center Target", "Right Target"];
 // Kitchen-sink component. Layout, colours, and hover behaviour live in CSS —
-// JS is reserved for genuine application state (text value, scrollTop,
+// JS is reserved for genuine application state (input values, scrollTop,
 // and row count). `:hover` and `:focus` are pure CSS pseudo-classes; no
 // `onMouseEnter`/`onMouseLeave` handlers are needed for styling.
 const APP_JSX_SOURCE: &str = r#"
@@ -36,6 +37,11 @@ import { render } from "oxide-runtime";
 
 function App() {
   const targetLabel = globalThis.state.targetLabel || "Pane";
+  const textValue = String(globalThis.state.text || "");
+  const numberValue = String(globalThis.state.number || "");
+  const rangeValue = String(globalThis.state.range || 50);
+  const checkboxValue = Boolean(globalThis.state.checkboxChecked);
+  const radioAValue = Boolean(globalThis.state.radioA);
 
   const renderRows = () => {
     const nodes = [];
@@ -74,7 +80,13 @@ function App() {
           class="btn btn-clear"
           onClick={() => {
             globalThis.state.rows = 20;
-            globalThis.state.value = "";
+            globalThis.state.text = "";
+            globalThis.state.number = "";
+            globalThis.state.range = 50;
+            globalThis.state.checkboxChecked = false;
+            globalThis.state.radioA = false;
+            globalThis.state.radioB = false;
+            globalThis.state.password = "";
             sendEvent(
               "action",
               JSON.stringify({ type: "clear", target: targetLabel }),
@@ -86,11 +98,80 @@ function App() {
       </div>
 
       <input
-        class="field"
-        value={String(globalThis.state.value || "")}
+        class="field field-text"
+        type="text"
+        value={textValue}
         placeholder="Type here..."
         onInput={(event) => {
-          globalThis.state.value = event.value;
+          globalThis.state.text = event.value;
+        }}
+      />
+
+      <input
+        class="field field-number"
+        type="number"
+        value={numberValue}
+        placeholder="Numeric value"
+        min="-100"
+        max="100"
+        step="0.5"
+        onInput={(event) => {
+          globalThis.state.number = event.value;
+        }}
+      />
+
+      <input
+        class="field field-range"
+        type="range"
+        min="0"
+        max="100"
+        step="5"
+        value={rangeValue}
+        onInput={(event) => {
+          globalThis.state.range = event.value;
+        }}
+      />
+
+      <div class="inline-fields">
+        <input
+          class="field field-checkbox"
+          type="checkbox"
+          checked={checkboxValue}
+          onInput={(event) => {
+            globalThis.state.checkboxChecked = event.checked;
+          }}
+        />
+        <input
+          class="field field-radio"
+          type="radio"
+          name="sink-mode"
+          onInput={(event) => {
+            globalThis.state.radioA = event.checked;
+            if (event.checked) {
+              globalThis.state.radioB = false;
+            }
+          }}
+        />
+        <input
+          class="field field-radio"
+          type="radio"
+          name="sink-mode"
+          onInput={(event) => {
+            globalThis.state.radioB = event.checked;
+            if (event.checked) {
+              globalThis.state.radioA = false;
+            }
+          }}
+        />
+      </div>
+
+      <input
+        class="field field-password"
+        type="password"
+        value={globalThis.state.password || ""}
+        placeholder="secret..."
+        onInput={(event) => {
+          globalThis.state.password = event.value;
         }}
       />
 
@@ -112,7 +193,7 @@ function App() {
 
       <div class="status">
         {() =>
-          `rows=${Math.max(1, Number(globalThis.state.rows || 24))} wheel=${globalThis.state.wheelCount || 0} scrollTop=${globalThis.state.scrollTop || 0}`
+          `rows=${Math.max(1, Number(globalThis.state.rows || 24))} wheel=${globalThis.state.wheelCount || 0} scrollTop=${globalThis.state.scrollTop || 0} text="${textValue}" number="${numberValue}" range=${rangeValue} checkbox=${checkboxValue ? "on" : "off"} radioA=${radioAValue ? "on" : "off"} radioB=${globalThis.state.radioB ? "on" : "off"} password=${globalThis.state.password || ""}`
         }
       </div>
     </div>
@@ -188,6 +269,46 @@ const APP_CSS: &str = r#"
 }
 .field:focus { outline: 2px solid #80b0ff; }
 
+.inline-fields {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+    align-items: center;
+}
+
+/* text / number / password all share the same single-line appearance */
+.field-text,
+.field-number,
+.field-password {
+    width: 336px;
+}
+
+/* Range slider: strip away the box — the renderer paints its own
+   track + thumb using the CSS `color` as the accent. */
+.field-range {
+    width: 336px;
+    height: 28px;
+    min-height: 28px;
+    padding: 0 4px;
+    margin-bottom: 10px;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #5b8cfa;
+    cursor: pointer;
+}
+
+/* Checkbox and radio: fixed square, accent colour drives the painted widget. */
+.field-checkbox,
+.field-radio {
+    width: 22px;
+    height: 22px;
+    min-height: 22px;
+    padding: 3px;
+    color: #5b8cfa;
+    cursor: pointer;
+}
+
 /* Scrollable row list — alternating stripes + per-row :hover. */
 .rows {
     display: block;
@@ -238,8 +359,25 @@ struct App {
     watch: Option<FileWatch>,
     scene: Scene<RenderTargetData>,
     last_mouse: (f32, f32),
+    modifiers: ModifiersState,
     capture_path: Option<PathBuf>,
     capture_done: bool,
+}
+
+struct SystemClipboard;
+
+impl ShellProvider for SystemClipboard {
+    fn get_clipboard_text(&self) -> Result<String, ClipboardError> {
+        arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.get_text())
+            .map_err(|_| ClipboardError)
+    }
+
+    fn set_clipboard_text(&self, text: String) -> Result<(), ClipboardError> {
+        arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set_text(text))
+            .map_err(|_| ClipboardError)
+    }
 }
 
 struct Gpu {
@@ -519,6 +657,10 @@ impl ApplicationHandler for App {
                 }
             }
 
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers.state();
+            }
+
             WindowEvent::MouseWheel { delta, .. } => {
                 let (x, y) = self.last_mouse;
                 let (delta_x, delta_y) = match delta {
@@ -688,10 +830,10 @@ impl ApplicationHandler for App {
                     code,
                     key_code: 0,
                     repeat,
-                    shift_key: false,
-                    ctrl_key: false,
-                    alt_key: false,
-                    meta_key: false,
+                    shift_key: self.modifiers.shift_key(),
+                    ctrl_key: self.modifiers.control_key(),
+                    alt_key: self.modifiers.alt_key(),
+                    meta_key: self.modifiers.super_key(),
                 };
                 let event_key = event.key.clone();
                 let result = self.scene.dispatch_key_down(event);
@@ -729,10 +871,10 @@ impl ApplicationHandler for App {
                     code,
                     key_code: 0,
                     repeat,
-                    shift_key: false,
-                    ctrl_key: false,
-                    alt_key: false,
-                    meta_key: false,
+                    shift_key: self.modifiers.shift_key(),
+                    ctrl_key: self.modifiers.control_key(),
+                    alt_key: self.modifiers.alt_key(),
+                    meta_key: self.modifiers.super_key(),
                 };
                 let event_key = event.key.clone();
                 let result = self.scene.dispatch_key_up(event);
@@ -883,7 +1025,13 @@ fn mount_targets(
             "globalThis.state.targetLabel = {label};\n\
              globalThis.state.targetIndex = {index};\n\
              globalThis.state.rows = 24;\n\
-             globalThis.state.value = \"\";\n",
+             globalThis.state.text = \"\";\n\
+             globalThis.state.number = \"\";\n\
+             globalThis.state.range = 50;\n\
+             globalThis.state.checkboxChecked = false;\n\
+             globalThis.state.radioA = false;\n\
+             globalThis.state.radioB = false;\n\
+             globalThis.state.password = \"\";\n",
             label = serde_json::to_string(label).unwrap(),
             index = index,
         );
@@ -899,9 +1047,11 @@ fn mount_targets(
                 device: Arc::clone(device),
                 queue: Arc::clone(queue),
                 stylesheets: vec![APP_CSS.to_string()],
+                document_scroll: false,
             },
             &seeded_source,
         );
+        instance.set_shell_provider(Arc::new(SystemClipboard));
 
         scene.add_surface(
             instance,
@@ -992,6 +1142,7 @@ fn main() {
         watch: None,
         scene: Scene::new(),
         last_mouse: (0.0, 0.0),
+        modifiers: ModifiersState::empty(),
         capture_path: args::capture_path_from_cli(),
         capture_done: false,
     };

@@ -7,6 +7,7 @@ mod js;
 mod renderer;
 mod scene;
 mod scrollbar;
+mod select;
 mod state;
 
 #[cfg(feature = "jsx-compiler")]

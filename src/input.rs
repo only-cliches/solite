@@ -5,9 +5,8 @@
 //! handlers receive `input` / `change` events with `event.value` and
 //! `event.target.value` already populated, mirroring the DOM event surface.
 //!
-//! v1 scope: single-line text, char-level caret, no selection range, no IME,
-//! no clipboard. Mouse hits position the caret at the end of the visible text
-//! (refinement to per-glyph hit-testing is a follow-up).
+//! v1 scope: single-line text and char-level caret/selection. Byte offsets are
+//! used only at the Blitz/Parley boundary for glyph layout.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -16,6 +15,34 @@ use std::time::{Duration, Instant};
 
 /// 500 ms gives the usual cursor blink cadence.
 pub(crate) const BLINK_INTERVAL: Duration = Duration::from_millis(500);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InputType {
+    Text,
+    Password,
+    Checkbox,
+    Radio,
+    Range,
+    Number,
+}
+
+impl InputType {
+    pub const fn is_text_like(self) -> bool {
+        matches!(self, Self::Text | Self::Password | Self::Number)
+    }
+
+    pub const fn is_numeric_like(self) -> bool {
+        matches!(self, Self::Number | Self::Range)
+    }
+
+    pub const fn is_checked_like(self) -> bool {
+        matches!(self, Self::Checkbox | Self::Radio)
+    }
+
+    pub const fn is_range(self) -> bool {
+        matches!(self, Self::Range)
+    }
+}
 
 /// Per-input editable state.
 #[derive(Debug, Clone)]
@@ -39,9 +66,24 @@ pub(crate) struct InputState {
     /// codepoint; the underlying value is unchanged so events still carry
     /// the real string.
     masked: bool,
+    /// Input type.
+    input_type: InputType,
+    /// Checkbox/radio state.
+    checked: bool,
+    /// Optional radio group / checkbox name.
+    name: Option<String>,
+    /// Range/number metadata.
+    min: Option<f64>,
+    max: Option<f64>,
+    step: Option<f64>,
     /// Read-only inputs accept focus + caret movement but ignore character
     /// input, backspace, and delete.
     readonly: bool,
+    /// Disabled inputs accept no editing and do not become focus targets.
+    disabled: bool,
+    /// Selection anchor as a character index. `None` means the selection is
+    /// collapsed at `caret_chars`.
+    selection_anchor_chars: Option<usize>,
 }
 
 impl Default for InputState {
@@ -53,7 +95,15 @@ impl Default for InputState {
             last_blink: Instant::now(),
             placeholder: None,
             masked: false,
+            input_type: InputType::Text,
+            checked: false,
+            name: None,
+            min: None,
+            max: None,
+            step: None,
             readonly: false,
+            disabled: false,
+            selection_anchor_chars: None,
         }
     }
 }
@@ -67,8 +117,377 @@ impl InputState {
         self.caret_chars
     }
 
+    /// Back-compat helper for layout/caret painting.
     pub fn caret_byte_index(&self) -> usize {
         self.byte_index_of(self.caret_chars)
+    }
+
+    pub fn kind(&self) -> InputType {
+        self.input_type
+    }
+
+    pub fn is_text_like(&self) -> bool {
+        self.input_type.is_text_like()
+    }
+
+    pub fn is_checked_like(&self) -> bool {
+        self.input_type.is_checked_like()
+    }
+
+    pub fn is_range(&self) -> bool {
+        self.input_type.is_range()
+    }
+
+    pub fn set_input_type(&mut self, input_type: &str) {
+        let next = match input_type.to_ascii_lowercase().as_str() {
+            "password" => InputType::Password,
+            "checkbox" => InputType::Checkbox,
+            "radio" => InputType::Radio,
+            "range" => InputType::Range,
+            "number" => InputType::Number,
+            _ => InputType::Text,
+        };
+
+        self.input_type = next;
+        self.masked = matches!(next, InputType::Password);
+        self.clear_selection();
+        self.caret_chars = 0;
+        if next == InputType::Range {
+            self.set_numeric_defaults();
+        }
+        self.touch_blink_on();
+    }
+
+    pub fn is_numeric_like(&self) -> bool {
+        self.input_type.is_numeric_like()
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn set_name(&mut self, name: Option<String>) {
+        self.name = name;
+    }
+
+    pub fn checked(&self) -> bool {
+        self.checked
+    }
+
+    pub fn set_checked(&mut self, checked: bool) {
+        if self.checked != checked {
+            self.checked = checked;
+            self.touch_blink_on();
+        }
+    }
+
+    pub fn is_radio(&self) -> bool {
+        matches!(self.input_type, InputType::Radio)
+    }
+
+    pub fn is_checkbox(&self) -> bool {
+        matches!(self.input_type, InputType::Checkbox)
+    }
+
+    pub fn toggle_checked(&mut self) -> bool {
+        if self.disabled || self.readonly {
+            return false;
+        }
+        let next = !self.checked;
+        self.set_checked(next);
+        true
+    }
+
+    pub fn set_min(&mut self, min: Option<f64>) {
+        self.min = min;
+        self.touch_blink_on();
+    }
+
+    pub fn set_max(&mut self, max: Option<f64>) {
+        self.max = max;
+        self.touch_blink_on();
+    }
+
+    pub fn set_step(&mut self, step: Option<f64>) {
+        self.step = match step {
+            Some(step) if step > 0.0 => Some(step),
+            Some(_) => None,
+            None => None,
+        };
+        self.touch_blink_on();
+    }
+
+    pub fn set_numeric_defaults(&mut self) {
+        if self.input_type == InputType::Range {
+            if self.min.is_none() {
+                self.min = Some(0.0);
+            }
+            if self.max.is_none() {
+                self.max = Some(100.0);
+            }
+            if self.step.is_none() {
+                self.step = Some(1.0);
+            }
+            if self.value.is_empty() {
+                self.value = InputState::format_number(0.0);
+                self.caret_chars = self.value.chars().count();
+            }
+        }
+    }
+
+    fn normalize_number_string_for_input(value: &str) -> bool {
+        if value.is_empty() {
+            return true;
+        }
+        let mut chars = value.chars().peekable();
+        if matches!(chars.peek(), Some('-')) {
+            let _ = chars.next();
+            if chars.peek().is_none() {
+                return true;
+            }
+        }
+        let mut seen_dot = false;
+        for ch in chars {
+            if ch.is_ascii_digit() {
+                continue;
+            }
+            if ch == '.' && !seen_dot {
+                seen_dot = true;
+                continue;
+            }
+            return false;
+        }
+        true
+    }
+
+    fn clamp_number(&self, value: f64) -> f64 {
+        let mut next = value;
+        if let Some(min) = self.min {
+            next = next.max(min);
+        }
+        if let Some(max) = self.max {
+            next = next.min(max);
+        }
+        next
+    }
+
+    pub fn numeric_value(&self) -> Option<f64> {
+        self.value.parse::<f64>().ok()
+    }
+
+    fn step_value(&self) -> f64 {
+        self.step.unwrap_or(1.0)
+    }
+
+    fn effective_range_min(&self) -> Option<f64> {
+        if self.input_type != InputType::Range {
+            return None;
+        }
+        Some(self.min.unwrap_or(0.0))
+    }
+
+    fn effective_range_max(&self) -> Option<f64> {
+        if self.input_type != InputType::Range {
+            return None;
+        }
+        Some(self.max.unwrap_or(100.0))
+    }
+
+    fn format_number(value: f64) -> String {
+        if value == -0.0 {
+            "0".to_string()
+        } else {
+            value.to_string()
+        }
+    }
+
+    fn numeric_value_or_default(&self, default: f64) -> f64 {
+        self.numeric_value().unwrap_or(default)
+    }
+
+    pub fn is_password(&self) -> bool {
+        self.input_type == InputType::Password
+    }
+
+    /// Byte index into the **displayed** text for the current caret position.
+    ///
+    /// For normal inputs this equals `caret_byte_index()` (a byte offset into
+    /// the raw value). For password inputs the displayed text is a sequence of
+    /// bullet chars (`\u{2022}`, 3 bytes each in UTF-8), so the display byte
+    /// index is `caret_chars * 3`.
+    pub fn display_caret_byte_index(&self) -> usize {
+        if self.input_type == InputType::Password {
+            self.caret_chars * '\u{2022}'.len_utf8()
+        } else {
+            self.caret_byte_index()
+        }
+    }
+
+    /// Set the slider value from a drag/click fraction (0.0 = min, 1.0 = max).
+    /// Snaps to the configured `step`, clamps to `[min, max]`.
+    pub fn set_value_from_range_fraction(&mut self, fraction: f64) -> bool {
+        if self.input_type != InputType::Range {
+            return false;
+        }
+        let min = self.effective_range_min().unwrap_or(0.0);
+        let max = self.effective_range_max().unwrap_or(100.0);
+        let step = self.step_value();
+        let raw = min + (max - min) * fraction.clamp(0.0, 1.0);
+        let stepped = (raw / step).round() * step;
+        self.set_numeric_value(stepped)
+    }
+
+    pub fn set_numeric_value(&mut self, raw: f64) -> bool {
+        let value = InputState::format_number(self.clamp_number(raw));
+        if self.value == value {
+            return false;
+        }
+        self.value = value;
+        self.caret_chars = self.value.chars().count();
+        self.clear_selection();
+        self.touch_blink_on();
+        true
+    }
+
+    pub fn step_number(&mut self, direction: i8) -> bool {
+        let current = self.numeric_value_or_default(0.0);
+        self.set_numeric_value(current + direction as f64 * self.step_value())
+    }
+
+    pub fn move_range_to_extreme(&mut self, at_maximum: bool) -> bool {
+        if self.input_type != InputType::Range {
+            return false;
+        }
+        let target = if at_maximum {
+            self.effective_range_max().unwrap_or(100.0)
+        } else {
+            self.effective_range_min().unwrap_or(0.0)
+        };
+        self.set_numeric_value(target)
+    }
+
+    pub fn insert_numeric_char(&mut self, ch: char) -> bool {
+        if self.readonly || self.disabled {
+            return false;
+        }
+        if !matches!(ch, '0'..='9' | '.' | '-') {
+            return false;
+        }
+        self.delete_selection_inner();
+        let byte_index = self.byte_index_of(self.caret_chars);
+        let mut next = self.value.clone();
+
+        if ch == '-' {
+            if self.caret_chars != 0 || next.contains('-') {
+                return false;
+            }
+            next.insert(0, '-');
+        } else {
+            next.insert(byte_index, ch);
+        }
+
+        if !Self::normalize_number_string_for_input(&next) {
+            return false;
+        }
+
+        self.value = next;
+        self.caret_chars += 1;
+        self.clear_selection();
+        self.touch_blink_on();
+        true
+    }
+
+    pub fn commit_numeric_preview(&mut self, preview: String) -> bool {
+        if self.readonly || self.disabled {
+            return false;
+        }
+        if !Self::normalize_number_string_for_input(&preview) {
+            return false;
+        }
+        if self.value == preview {
+            return false;
+        }
+        self.value = preview;
+        self.caret_chars = self.value.chars().count();
+        self.clear_selection();
+        self.touch_blink_on();
+        true
+    }
+
+    pub fn set_numeric_value_from_text(&mut self, text: &str) -> bool {
+        if self.readonly || self.disabled {
+            return false;
+        }
+        let value = text.trim();
+        if value.is_empty() {
+            return false;
+        }
+        if Self::normalize_number_string_for_input(value) {
+            if let Some(parsed) = value.parse::<f64>().ok() {
+                return self.set_numeric_value(parsed);
+            }
+        }
+        if self.value != value {
+            self.value = value.to_string();
+            self.caret_chars = self.value.chars().count();
+            self.clear_selection();
+            self.touch_blink_on();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn update_range_value(&mut self, raw: &str) -> bool {
+        if self.input_type == InputType::Range {
+            self.set_numeric_value_from_text(raw)
+        } else {
+            false
+        }
+    }
+
+    pub fn insert_numeric_str(&mut self, text: &str) -> bool {
+        if self.readonly || self.disabled {
+            return false;
+        }
+        let mut preview = self.value.clone();
+        self.delete_selection_inner();
+        let byte_index = self.byte_index_of(self.caret_chars);
+        preview.insert_str(byte_index, text);
+        if !Self::normalize_number_string_for_input(&preview) {
+            return false;
+        }
+        self.value.insert_str(byte_index, text);
+        self.caret_chars += text.chars().count();
+        self.clear_selection();
+        self.touch_blink_on();
+        true
+    }
+
+    pub fn selection_start(&self) -> usize {
+        let (start, _) = self.selection_range();
+        start
+    }
+
+    pub fn selection_end(&self) -> usize {
+        let (_, end) = self.selection_range();
+        end
+    }
+
+    pub fn selection_byte_range(&self) -> (usize, usize) {
+        let (start, end) = self.selection_range();
+        (self.byte_index_of(start), self.byte_index_of(end))
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.selection_anchor_chars
+            .is_some_and(|anchor| anchor != self.caret_chars)
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection_range();
+        (start != end)
+            .then(|| self.value[self.byte_index_of(start)..self.byte_index_of(end)].to_string())
     }
 
     pub fn len_chars(&self) -> usize {
@@ -80,8 +499,36 @@ impl InputState {
         if self.value == value {
             return;
         }
-        self.value = value;
-        self.caret_chars = self.len_chars();
+        match self.input_type {
+            InputType::Checkbox | InputType::Radio => {
+                if value.is_empty() {
+                    self.value = String::new();
+                } else {
+                    self.value = value;
+                }
+            }
+            InputType::Range | InputType::Number => {
+                self.value = if Self::normalize_number_string_for_input(&value) {
+                    if value.is_empty() {
+                        value
+                    } else {
+                        self.clamp_number(value.parse().unwrap_or(0.0)).to_string()
+                    }
+                } else {
+                    value
+                };
+                self.caret_chars = self.value.chars().count();
+            }
+            _ => {
+                self.value = value;
+            }
+        }
+        if !self.input_type.is_text_like() {
+            self.selection_anchor_chars = None;
+        } else {
+            self.caret_chars = self.len_chars();
+        }
+        self.clear_selection();
         self.touch_blink_on();
     }
 
@@ -101,95 +548,287 @@ impl InputState {
         self.readonly
     }
 
+    pub fn set_disabled(&mut self, disabled: bool) {
+        self.disabled = disabled;
+        if self.disabled {
+            self.clear_selection();
+            self.caret_chars = 0;
+        }
+    }
+
+    pub fn disabled(&self) -> bool {
+        self.disabled
+    }
+
     /// Insert a single character at the caret. Returns true on success.
     pub fn insert(&mut self, ch: char) -> bool {
-        if self.readonly {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
             return false;
         }
+        self.delete_selection_inner();
         let byte = self.byte_index_of(self.caret_chars);
         self.value.insert(byte, ch);
         self.caret_chars += 1;
+        self.clear_selection();
         self.touch_blink_on();
         true
     }
 
     /// Insert a string at the caret (used for paste / multi-char keys).
     pub fn insert_str(&mut self, s: &str) -> bool {
-        if self.readonly || s.is_empty() {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() || s.is_empty() {
             return false;
         }
+        self.delete_selection_inner();
         let byte = self.byte_index_of(self.caret_chars);
         self.value.insert_str(byte, s);
         self.caret_chars += s.chars().count();
+        self.clear_selection();
         self.touch_blink_on();
         true
     }
 
     /// Delete the character before the caret. No-op at start of field.
     pub fn backspace(&mut self) -> bool {
-        if self.readonly || self.caret_chars == 0 {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
+            return false;
+        }
+        if self.delete_selection_inner() {
+            self.touch_blink_on();
+            return true;
+        }
+        if self.caret_chars == 0 {
             return false;
         }
         let start = self.byte_index_of(self.caret_chars - 1);
         let end = self.byte_index_of(self.caret_chars);
         self.value.replace_range(start..end, "");
         self.caret_chars -= 1;
+        self.clear_selection();
         self.touch_blink_on();
         true
     }
 
     /// Delete the character at the caret. No-op at end of field.
     pub fn delete_forward(&mut self) -> bool {
-        if self.readonly || self.caret_chars >= self.len_chars() {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
+            return false;
+        }
+        if self.delete_selection_inner() {
+            self.touch_blink_on();
+            return true;
+        }
+        if self.caret_chars >= self.len_chars() {
             return false;
         }
         let start = self.byte_index_of(self.caret_chars);
         let end = self.byte_index_of(self.caret_chars + 1);
         self.value.replace_range(start..end, "");
+        self.clear_selection();
         self.touch_blink_on();
         true
     }
 
     pub fn move_left(&mut self) -> bool {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
+            return false;
+        }
+        if self.has_selection() {
+            self.caret_chars = self.selection_start();
+            self.clear_selection();
+            self.touch_blink_on();
+            return true;
+        }
+        self.move_left_extending(false)
+    }
+
+    pub fn move_left_extending(&mut self, extend: bool) -> bool {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
+            return false;
+        }
+        if !extend && self.has_selection() {
+            return self.move_left();
+        }
         if self.caret_chars == 0 {
             return false;
         }
+        self.prepare_selection_extension(extend);
         self.caret_chars -= 1;
+        if !extend {
+            self.clear_selection();
+        }
         self.touch_blink_on();
         true
     }
 
     pub fn move_right(&mut self) -> bool {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
+            return false;
+        }
+        if self.has_selection() {
+            self.caret_chars = self.selection_end();
+            self.clear_selection();
+            self.touch_blink_on();
+            return true;
+        }
+        self.move_right_extending(false)
+    }
+
+    pub fn move_right_extending(&mut self, extend: bool) -> bool {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
+            return false;
+        }
+        if !extend && self.has_selection() {
+            return self.move_right();
+        }
         if self.caret_chars >= self.len_chars() {
             return false;
         }
+        self.prepare_selection_extension(extend);
         self.caret_chars += 1;
+        if !extend {
+            self.clear_selection();
+        }
         self.touch_blink_on();
         true
     }
 
     pub fn move_home(&mut self) -> bool {
-        if self.caret_chars == 0 {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
             return false;
         }
+        self.move_home_extending(false)
+    }
+
+    pub fn move_home_extending(&mut self, extend: bool) -> bool {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
+            return false;
+        }
+        if self.caret_chars == 0 && (!extend || !self.has_selection()) {
+            return false;
+        }
+        self.prepare_selection_extension(extend);
         self.caret_chars = 0;
+        if !extend {
+            self.clear_selection();
+        }
         self.touch_blink_on();
         true
     }
 
     pub fn move_end(&mut self) -> bool {
-        let end = self.len_chars();
-        if self.caret_chars == end {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
             return false;
         }
+        self.move_end_extending(false)
+    }
+
+    pub fn move_end_extending(&mut self, extend: bool) -> bool {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
+            return false;
+        }
+        let end = self.len_chars();
+        if self.caret_chars == end && (!extend || !self.has_selection()) {
+            return false;
+        }
+        self.prepare_selection_extension(extend);
         self.caret_chars = end;
+        if !extend {
+            self.clear_selection();
+        }
         self.touch_blink_on();
         true
     }
 
     pub fn place_caret_at_end(&mut self) {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
+            return;
+        }
         self.caret_chars = self.len_chars();
+        self.clear_selection();
         self.touch_blink_on();
+    }
+
+    pub fn place_caret(&mut self, char_idx: usize) {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
+            return;
+        }
+        self.caret_chars = char_idx.min(self.len_chars());
+        self.clear_selection();
+        self.touch_blink_on();
+    }
+
+    pub fn set_selection(&mut self, anchor: usize, focus: usize) {
+        if !self.input_type.is_text_like() {
+            return;
+        }
+        let len = self.len_chars();
+        let anchor = anchor.min(len);
+        let focus = focus.min(len);
+        self.caret_chars = focus;
+        self.selection_anchor_chars = (anchor != focus).then_some(anchor);
+        self.touch_blink_on();
+    }
+
+    pub fn select_all(&mut self) -> bool {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
+            return false;
+        }
+        let len = self.len_chars();
+        if len == 0 || (self.selection_anchor_chars == Some(0) && self.caret_chars == len) {
+            return false;
+        }
+        self.selection_anchor_chars = Some(0);
+        self.caret_chars = len;
+        self.touch_blink_on();
+        true
+    }
+
+    pub fn delete_selection(&mut self) -> bool {
+        if self.readonly || self.disabled || !self.input_type.is_text_like() {
+            return false;
+        }
+        if self.delete_selection_inner() {
+            self.touch_blink_on();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn char_index_for_byte(&self, byte_idx: usize) -> usize {
+        if byte_idx >= self.value.len() {
+            return self.len_chars();
+        }
+        self.value
+            .char_indices()
+            .take_while(|(idx, _)| *idx < byte_idx)
+            .count()
+    }
+
+    pub fn word_range_at(&self, char_idx: usize) -> Option<(usize, usize)> {
+        let chars: Vec<char> = self.value.chars().collect();
+        if chars.is_empty() {
+            return None;
+        }
+
+        let idx = char_idx.min(chars.len().saturating_sub(1));
+        let is_word = |ch: char| ch.is_alphanumeric() || ch == '_';
+        if !is_word(chars[idx]) {
+            return Some((idx, idx + 1));
+        }
+
+        let mut start = idx;
+        while start > 0 && is_word(chars[start - 1]) {
+            start -= 1;
+        }
+
+        let mut end = idx + 1;
+        while end < chars.len() && is_word(chars[end]) {
+            end += 1;
+        }
+
+        Some((start, end))
     }
 
     /// Advance the blink timer. Returns true if visibility flipped (caller
@@ -224,12 +863,29 @@ impl InputState {
     /// frame: the value or placeholder. The caret is painted separately by
     /// the renderer so its position and blink do not depend on text layout.
     pub fn render(&self, _focused: bool) -> (String, bool) {
-        let display: String = if self.masked {
-            self.value.chars().map(|_| '\u{2022}').collect() // bullet
-        } else {
-            self.value.clone()
+        let display: String = match self.input_type {
+            InputType::Password => self.value.chars().map(|_| '\u{2022}').collect(),
+            InputType::Text | InputType::Number | InputType::Range => self.value.clone(),
+            InputType::Checkbox => {
+                if self.checked {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                }
+            }
+            InputType::Radio => {
+                if self.checked {
+                    "on".to_string()
+                } else {
+                    "off".to_string()
+                }
+            }
         };
-        if display.is_empty() {
+        if matches!(
+            self.input_type,
+            InputType::Text | InputType::Password | InputType::Number
+        ) && display.is_empty()
+        {
             if let Some(ref ph) = self.placeholder {
                 return (ph.clone(), true);
             }
@@ -243,6 +899,36 @@ impl InputState {
             .nth(char_idx)
             .map(|(i, _)| i)
             .unwrap_or(self.value.len())
+    }
+
+    fn selection_range(&self) -> (usize, usize) {
+        let anchor = self.selection_anchor_chars.unwrap_or(self.caret_chars);
+        (anchor.min(self.caret_chars), anchor.max(self.caret_chars))
+    }
+
+    fn clear_selection(&mut self) {
+        self.selection_anchor_chars = None;
+    }
+
+    fn prepare_selection_extension(&mut self, extend: bool) {
+        if extend {
+            self.selection_anchor_chars.get_or_insert(self.caret_chars);
+        } else {
+            self.clear_selection();
+        }
+    }
+
+    fn delete_selection_inner(&mut self) -> bool {
+        let (start, end) = self.selection_range();
+        if start == end {
+            return false;
+        }
+        let start_byte = self.byte_index_of(start);
+        let end_byte = self.byte_index_of(end);
+        self.value.replace_range(start_byte..end_byte, "");
+        self.caret_chars = start;
+        self.clear_selection();
+        true
     }
 }
 
@@ -299,6 +985,47 @@ mod tests {
         assert!(s.move_left());
         assert!(!s.move_left(), "already at start");
         assert_eq!(s.caret(), 0);
+    }
+
+    #[test]
+    fn shift_arrows_extend_selection_and_typing_replaces_it() {
+        let mut s = InputState::default();
+        s.set_value("abcd");
+        assert!(s.move_left_extending(true));
+        assert!(s.move_left_extending(true));
+        assert_eq!((s.selection_start(), s.selection_end()), (2, 4));
+        assert_eq!(s.selected_text().as_deref(), Some("cd"));
+        assert!(s.insert('X'));
+        assert_eq!(s.value(), "abX");
+        assert_eq!(s.caret(), 3);
+        assert!(!s.has_selection());
+    }
+
+    #[test]
+    fn delete_removes_selected_text() {
+        let mut s = InputState::default();
+        s.set_value("abcdef");
+        s.set_selection(2, 5);
+        assert!(s.delete_forward());
+        assert_eq!(s.value(), "abf");
+        assert_eq!(s.caret(), 2);
+    }
+
+    #[test]
+    fn select_all_uses_full_char_range() {
+        let mut s = InputState::default();
+        s.set_value("hé");
+        assert!(s.select_all());
+        assert_eq!((s.selection_start(), s.selection_end()), (0, 2));
+        assert_eq!(s.selection_byte_range(), (0, 3));
+    }
+
+    #[test]
+    fn word_range_expands_from_char_index() {
+        let mut s = InputState::default();
+        s.set_value("hello world");
+        assert_eq!(s.word_range_at(2), Some((0, 5)));
+        assert_eq!(s.word_range_at(8), Some((6, 11)));
     }
 
     #[test]

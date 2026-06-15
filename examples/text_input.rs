@@ -10,11 +10,12 @@ mod blit;
 mod capture;
 
 use blit::{BlitContext, BlitDraw};
+use blitz_traits::shell::{ClipboardError, ShellProvider};
 use oxide_dom::{Instance, InstanceConfig, KeyboardEvent};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, MouseButton as WinitMouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, NamedKey, PhysicalKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 const TEXT_INPUT_CSS: &str = r#"
@@ -57,8 +58,25 @@ struct App {
     instance: Option<Instance>,
     gpu: Option<Gpu>,
     last_mouse: (f32, f32),
+    modifiers: ModifiersState,
     capture_path: Option<PathBuf>,
     capture_done: bool,
+}
+
+struct SystemClipboard;
+
+impl ShellProvider for SystemClipboard {
+    fn get_clipboard_text(&self) -> Result<String, ClipboardError> {
+        arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.get_text())
+            .map_err(|_| ClipboardError)
+    }
+
+    fn set_clipboard_text(&self, text: String) -> Result<(), ClipboardError> {
+        arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set_text(text))
+            .map_err(|_| ClipboardError)
+    }
 }
 
 struct Gpu {
@@ -124,9 +142,11 @@ render(() => App(), __OX_ROOT__);
                 device: gpu.device.clone(),
                 queue: gpu.queue.clone(),
                 stylesheets: vec![TEXT_INPUT_CSS.to_string()],
+                document_scroll: false,
             },
             &component_source,
         );
+        instance.set_shell_provider(Arc::new(SystemClipboard));
         let _ = instance.tick();
 
         // Drive a focus click + live keystrokes to exercise the reactive
@@ -299,6 +319,10 @@ render(() => App(), __OX_ROOT__);
                 }
             }
 
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers.state();
+            }
+
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -322,10 +346,10 @@ render(() => App(), __OX_ROOT__);
                         code,
                         key_code: 0,
                         repeat,
-                        shift_key: false,
-                        ctrl_key: false,
-                        alt_key: false,
-                        meta_key: false,
+                        shift_key: self.modifiers.shift_key(),
+                        ctrl_key: self.modifiers.control_key(),
+                        alt_key: self.modifiers.alt_key(),
+                        meta_key: self.modifiers.super_key(),
                     };
                     let event_key = event.key.clone();
                     let result = instance.dispatch_key_down(event);
@@ -361,10 +385,10 @@ render(() => App(), __OX_ROOT__);
                         code,
                         key_code: 0,
                         repeat,
-                        shift_key: false,
-                        ctrl_key: false,
-                        alt_key: false,
-                        meta_key: false,
+                        shift_key: self.modifiers.shift_key(),
+                        ctrl_key: self.modifiers.control_key(),
+                        alt_key: self.modifiers.alt_key(),
+                        meta_key: self.modifiers.super_key(),
                     };
                     let event_key = event.key.clone();
                     let result = instance.dispatch_key_up(event);
@@ -529,6 +553,7 @@ fn main() {
         instance: None,
         gpu: None,
         last_mouse: (8.0, 8.0),
+        modifiers: ModifiersState::empty(),
         capture_path: args::capture_path_from_cli(),
         capture_done: false,
     };

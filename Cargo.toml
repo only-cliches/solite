@@ -44,6 +44,7 @@ winit = "0.30"
 pollster = "0.4"
 image = "0.25"
 stylo = "0.18"
+arboard = "3.4"
 
 [[example]]
 name = "winit_window"

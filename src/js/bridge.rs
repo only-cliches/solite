@@ -14,10 +14,19 @@ use rquickjs::Value;
 /// (node_id, event_name) → persistent handler function.
 pub(crate) type HandlerMap = HashMap<(usize, String), Persistent<Function<'static>>>;
 
+fn parse_bool_attr(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    match value.as_str() {
+        "" | "0" | "false" | "off" => false,
+        _ => true,
+    }
+}
+
 pub(crate) struct DomBridge {
     doc: Rc<RefCell<BaseDocument>>,
     pub handlers: Rc<RefCell<HandlerMap>>,
     pub inputs: InputRegistry,
+    pub selects: crate::select::SelectRegistry,
 }
 
 fn html_qual(tag: &str) -> QualName {
@@ -27,6 +36,106 @@ fn html_qual(tag: &str) -> QualName {
 fn attr_qual(name: &str) -> QualName {
     QualName::new(None, ns!(), LocalName::from(name))
 }
+
+/// Returns the nearest ancestor `<select>` element if `node_id` is an `<option>`.
+fn find_parent_select(doc: &BaseDocument, node_id: usize) -> Option<usize> {
+    let mut id = node_id;
+    while let Some(node) = doc.get_node(id) {
+        if let Some(parent_id) = node.parent {
+            if let Some(parent) = doc.get_node(parent_id) {
+                if let Some(elem) = parent.element_data() {
+                    if elem.name.local.as_ref() == "select" {
+                        return Some(parent_id);
+                    }
+                }
+            }
+            id = parent_id;
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+/// Rebuild the select state from the current DOM subtree.
+/// Walks all `<option>` children of the select and updates:
+/// - options list
+/// - selected_index
+///
+/// Returns the computed display text that should be updated in the synthetic display node.
+fn rebuild_select_state_from_dom(
+    doc: &BaseDocument,
+    selects: &mut std::collections::HashMap<usize, crate::select::SelectState>,
+    select_id: usize,
+) -> Option<String> {
+    let Some(select_node) = doc.get_node(select_id) else {
+        return None;
+    };
+
+    let mut options = Vec::new();
+    let mut selected_index = None;
+    let children = select_node.children.clone();
+
+    for child_id in children {
+        if let Some(child) = doc.get_node(child_id) {
+            if let Some(elem) = child.element_data() {
+                if elem.name.local.as_ref() == "option" {
+                    // Extract option attributes
+                    let value = elem
+                        .attrs
+                        .iter()
+                        .find(|a| a.name.local.as_ref() == "value")
+                        .map(|a| a.value.to_string())
+                        .unwrap_or_else(|| {
+                            // Fallback to text content if no value attribute
+                            doc.get_node(child_id)
+                                .and_then(|n| n.text_data())
+                                .map(|t| t.content.clone())
+                                .unwrap_or_default()
+                        });
+
+                    let label = doc
+                        .get_node(child_id)
+                        .and_then(|n| n.text_data())
+                        .map(|t| t.content.clone())
+                        .unwrap_or_else(|| value.clone());
+
+                    let disabled = elem
+                        .attrs
+                        .iter()
+                        .find(|a| a.name.local.as_ref() == "disabled")
+                        .is_some();
+
+                    let is_selected = elem
+                        .attrs
+                        .iter()
+                        .find(|a| a.name.local.as_ref() == "selected")
+                        .is_some();
+
+                    if is_selected && selected_index.is_none() {
+                        selected_index = Some(options.len());
+                    }
+
+                    options.push(crate::select::SelectOption::new(value, label, disabled));
+                }
+            }
+        }
+    }
+
+    // Default to first enabled option if none explicitly selected
+    if selected_index.is_none() {
+        selected_index = options.iter().position(|opt| !opt.disabled);
+    }
+
+    if let Some(select_state) = selects.get_mut(&select_id) {
+        select_state.set_options(options);
+        select_state.set_selected_index(selected_index);
+        Some(select_state.current_label())
+    } else {
+        None
+    }
+}
+
 
 /// Returns the `<style>` element id that `node_id` belongs to, if any.
 ///
@@ -53,11 +162,13 @@ impl DomBridge {
         doc: Rc<RefCell<BaseDocument>>,
         handlers: Rc<RefCell<HandlerMap>>,
         inputs: InputRegistry,
+        selects: crate::select::SelectRegistry,
     ) -> Self {
         Self {
             doc,
             handlers,
             inputs,
+            selects,
         }
     }
 
@@ -95,9 +206,14 @@ impl DomBridge {
         // Instance updates as the user edits. The text node is owned by
         // the engine — JS shouldn't mutate it, but if it does, the next
         // edit overwrites it on the next render.
+        //
+        // For `<select>`, we similarly register the node in the select registry
+        // and create a synthetic text display node that shows the selected option.
+        // Real `<option>` children are kept as normal DOM children (with display: none).
         {
             let doc = Rc::clone(&self.doc);
             let inputs = Rc::clone(&self.inputs);
+            let selects = Rc::clone(&self.selects);
             globals.set(
                 "__ox_createElement",
                 Function::new(ctx.clone(), move |tag: String| -> JsResult<usize> {
@@ -108,6 +224,11 @@ impl DomBridge {
                         d.mutate().append_children(id, &[text_id]);
                         drop(d);
                         inputs.borrow_mut().insert(id, InputState::default());
+                    } else if tag.eq_ignore_ascii_case("select") {
+                        let text_id = d.create_text_node("");
+                        d.mutate().append_children(id, &[text_id]);
+                        drop(d);
+                        selects.borrow_mut().insert(id, crate::select::SelectState::default());
                     }
                     Ok(id)
                 }),
@@ -128,12 +249,18 @@ impl DomBridge {
         // ── __ox_setAttr — string/boolean/number attributes ───────────────────
         //
         // For input-managed attributes (`value`, `placeholder`, `type`,
-        // `readonly`), update the InputState too so the engine's editable
-        // text mirrors what JS asked for and subsequent `input` events
-        // carry the new value back.
+        // `checked`, `name`, `min`, `max`, `step`, `readonly`, `disabled`),
+        // update the InputState too so the engine's editable text mirrors
+        // what JS asked for and subsequent `input` events carry the new
+        // value back.
+        //
+        // For select-managed attributes (`name`, `disabled`) and option attributes
+        // (`value`, `selected`, `disabled`), update SelectState and trigger
+        // option list rebuilding.
         {
             let doc = Rc::clone(&self.doc);
             let inputs = Rc::clone(&self.inputs);
+            let selects = Rc::clone(&self.selects);
             globals.set(
                 "__ox_setAttr",
                 Function::new(
@@ -142,13 +269,130 @@ impl DomBridge {
                         doc.borrow_mut()
                             .mutate()
                             .set_attribute(node_id, attr_qual(&key), &value);
-                        if let Some(state) = inputs.borrow_mut().get_mut(&node_id) {
-                            match key.as_str() {
-                                "value" => state.set_value(value),
-                                "placeholder" => state.set_placeholder(Some(value)),
-                                "type" => state.set_masked(value.eq_ignore_ascii_case("password")),
-                                "readonly" => state.set_readonly(!value.is_empty()),
-                                _ => {}
+                        match key.as_str() {
+                            "value" => {
+                                if let Some(state) = inputs.borrow_mut().get_mut(&node_id) {
+                                    state.set_value(value);
+                                }
+                            }
+                            "placeholder" => {
+                                if let Some(state) = inputs.borrow_mut().get_mut(&node_id) {
+                                    state.set_placeholder(Some(value));
+                                }
+                            }
+                            "type" => {
+                                if let Some(state) = inputs.borrow_mut().get_mut(&node_id) {
+                                    state.set_input_type(&value);
+                                }
+                            }
+                            "checked" => {
+                                let checked = parse_bool_attr(&value);
+                                let (is_radio, group_name) = {
+                                    let state = inputs.borrow();
+                                    let Some(state) = state.get(&node_id) else {
+                                        return Ok(());
+                                    };
+                                    (
+                                        state.kind() == crate::input::InputType::Radio,
+                                        state
+                                            .name()
+                                            .map(str::to_owned)
+                                            .filter(|name| !name.is_empty()),
+                                    )
+                                };
+
+                                if let Some(state) = inputs.borrow_mut().get_mut(&node_id) {
+                                    state.set_checked(checked);
+                                }
+
+                                // Sync blitz-dom's internal CheckboxInput so the visual
+                                // state stays in sync with programmatic JS updates.
+                                if let Some(node) = doc.borrow_mut().get_node_mut(node_id) {
+                                    if let Some(el) = node.element_data_mut() {
+                                        if let Some(is_checked) = el.checkbox_input_checked_mut() {
+                                            *is_checked = checked;
+                                        }
+                                    }
+                                }
+
+                                if is_radio
+                                    && checked
+                                    && let Some(group_name) = group_name
+                                {
+                                    let mut map = inputs.borrow_mut();
+                                    for (other_id, other_state) in map.iter_mut() {
+                                        if *other_id == node_id {
+                                            continue;
+                                        }
+                                        if other_state.kind() != crate::input::InputType::Radio {
+                                            continue;
+                                        }
+                                        if other_state.name() == Some(group_name.as_str()) {
+                                            other_state.set_checked(false);
+                                        }
+                                    }
+                                }
+                            }
+                            "name" => {
+                                if let Some(state) = inputs.borrow_mut().get_mut(&node_id) {
+                                    state.set_name(if value.is_empty() {
+                                        None
+                                    } else {
+                                        Some(value)
+                                    });
+                                }
+                            }
+                            "min" => {
+                                if let Some(state) = inputs.borrow_mut().get_mut(&node_id) {
+                                    state.set_min(value.parse::<f64>().ok());
+                                }
+                            }
+                            "max" => {
+                                if let Some(state) = inputs.borrow_mut().get_mut(&node_id) {
+                                    state.set_max(value.parse::<f64>().ok());
+                                }
+                            }
+                            "step" => {
+                                if let Some(state) = inputs.borrow_mut().get_mut(&node_id) {
+                                    state.set_step(value.parse::<f64>().ok());
+                                }
+                            }
+                            "readonly" => {
+                                if let Some(state) = inputs.borrow_mut().get_mut(&node_id) {
+                                    state.set_readonly(parse_bool_attr(&value));
+                                }
+                            }
+                            "disabled" => {
+                                if let Some(state) = inputs.borrow_mut().get_mut(&node_id) {
+                                    state.set_disabled(parse_bool_attr(&value));
+                                }
+                                if let Some(state) = selects.borrow_mut().get_mut(&node_id) {
+                                    state.set_disabled(parse_bool_attr(&value));
+                                }
+                            }
+                            _ => {
+                                // Handle option-specific attributes by finding the parent select
+                                if let Some(parent_select_id) = find_parent_select(&doc.borrow(), node_id) {
+                                    match key.as_str() {
+                                        "value" | "selected" => {
+                                            let borrow = doc.borrow();
+                                            if let Some(display_text) = rebuild_select_state_from_dom(&borrow, &mut selects.borrow_mut(), parent_select_id) {
+                                                drop(borrow);
+                                                let mut doc_mut = doc.borrow_mut();
+                                                if let Some(select_node) = doc_mut.get_node(parent_select_id) {
+                                                    if let Some(&display_node_id) = select_node.children.first() {
+                                                        if let Some(display_node) = doc_mut.get_node_mut(display_node_id) {
+                                                            if let Some(text_data) = display_node.text_data_mut() {
+                                                                text_data.content = display_text;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
                             }
                         }
                         Ok(())
@@ -323,8 +567,11 @@ impl DomBridge {
         // When inserting into a `<style>` element (or inserting a `<style>`
         // element with text already attached), reprocess the stylesheet so the
         // CSS contents become active.
+        //
+        // When inserting an `<option>` into a `<select>`, rebuild the select state.
         {
             let doc = Rc::clone(&self.doc);
+            let selects = Rc::clone(&self.selects);
             globals.set(
                 "__ox_insertNode",
                 Function::new(
@@ -345,6 +592,28 @@ impl DomBridge {
                         {
                             borrow.upsert_stylesheet_for_node(style_id);
                         }
+
+                        // If parent is a select, rebuild its options
+                        if borrow
+                            .get_node(parent)
+                            .and_then(|n| n.element_data())
+                            .is_some_and(|e| e.name.local.as_ref() == "select")
+                        {
+                            if let Some(display_text) = rebuild_select_state_from_dom(&borrow, &mut selects.borrow_mut(), parent) {
+                                drop(borrow);
+                                let mut borrow = doc.borrow_mut();
+                                if let Some(select_node) = borrow.get_node(parent) {
+                                    if let Some(&display_node_id) = select_node.children.first() {
+                                        if let Some(display_node) = borrow.get_node_mut(display_node_id) {
+                                            if let Some(text_data) = display_node.text_data_mut() {
+                                                text_data.content = display_text;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         Ok(())
                     },
                 ),
@@ -352,14 +621,42 @@ impl DomBridge {
         }
 
         // ── removeNode ────────────────────────────────────────────────────────
+        //
+        // After removing a node, if it was an option in a select, rebuild the select state.
         {
             let doc = Rc::clone(&self.doc);
+            let selects = Rc::clone(&self.selects);
             globals.set(
                 "__ox_removeNode",
                 Function::new(
                     ctx.clone(),
                     move |_parent: usize, node: usize| -> JsResult<()> {
+                        // Find parent select before removal
+                        let parent_select = {
+                            let borrow = doc.borrow();
+                            find_parent_select(&borrow, node)
+                        };
+
                         doc.borrow_mut().mutate().remove_and_drop_node(node);
+
+                        // Rebuild select state if this was an option
+                        if let Some(select_id) = parent_select {
+                            let borrow = doc.borrow();
+                            if let Some(display_text) = rebuild_select_state_from_dom(&borrow, &mut selects.borrow_mut(), select_id) {
+                                drop(borrow);
+                                let mut borrow = doc.borrow_mut();
+                                if let Some(select_node) = borrow.get_node(select_id) {
+                                    if let Some(&display_node_id) = select_node.children.first() {
+                                        if let Some(display_node) = borrow.get_node_mut(display_node_id) {
+                                            if let Some(text_data) = display_node.text_data_mut() {
+                                                text_data.content = display_text;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         Ok(())
                     },
                 ),
@@ -370,18 +667,56 @@ impl DomBridge {
         //
         // If this text node lives under a `<style>` element, refresh the
         // attached stylesheet so the new CSS source takes effect.
+        // If it's a text child of an `<option>`, rebuild the parent select.
         {
             let doc = Rc::clone(&self.doc);
+            let selects = Rc::clone(&self.selects);
             globals.set(
                 "__ox_setText",
                 Function::new(
                     ctx.clone(),
                     move |node_id: usize, text: String| -> JsResult<()> {
+                        let parent_select = {
+                            let borrow = doc.borrow();
+                            if let Some(parent_id) = borrow.get_node(node_id).and_then(|n| n.parent) {
+                                if let Some(parent) = borrow.get_node(parent_id) {
+                                    if parent.element_data().is_some_and(|e| e.name.local.as_ref() == "option") {
+                                        find_parent_select(&borrow, parent_id)
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        };
+
                         let mut borrow = doc.borrow_mut();
                         borrow.mutate().set_node_text(node_id, &text);
                         if let Some(style_id) = enclosing_style_element(&borrow, node_id) {
                             borrow.upsert_stylesheet_for_node(style_id);
                         }
+                        drop(borrow);
+
+                        if let Some(select_id) = parent_select {
+                            let borrow = doc.borrow();
+                            if let Some(display_text) = rebuild_select_state_from_dom(&borrow, &mut selects.borrow_mut(), select_id) {
+                                drop(borrow);
+                                let mut borrow = doc.borrow_mut();
+                                if let Some(select_node) = borrow.get_node(select_id) {
+                                    if let Some(&display_node_id) = select_node.children.first() {
+                                        if let Some(display_node) = borrow.get_node_mut(display_node_id) {
+                                            if let Some(text_data) = display_node.text_data_mut() {
+                                                text_data.content = display_text;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         Ok(())
                     },
                 ),

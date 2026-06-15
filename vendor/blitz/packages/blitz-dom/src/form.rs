@@ -267,11 +267,15 @@ fn construct_entry_list(doc: &BaseDocument, form_id: usize, submitter_id: usize)
             continue;
         };
 
-        // TODO: If the field element is a select element,
-        //  then for each option element in the select element's
-        //  list of options whose selectedness is true and that is not disabled,
-        //  create an entry with name and the value of the option element,
-        //  and append it to entry list.
+        // If the field element is a select element,
+        // read its value attribute (which is synced from the selected option)
+        // and create an entry.
+        if element.name.local == local_name!("select") {
+            if let Some(value) = element.attr(local_name!("value")) {
+                create_entry(name, value.into());
+            }
+            continue;
+        }
 
         // Otherwise, if the field element is an input element whose type attribute is in the Checkbox state or the Radio Button state, then:
         if element.name.local == local_name!("input")

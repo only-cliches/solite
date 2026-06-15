@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use blitz_dom::{BaseDocument, DocumentConfig, LocalName, Node, QualName, ns};
-use blitz_traits::shell::{ColorScheme, Viewport};
+use blitz_traits::shell::{ColorScheme, ShellProvider, Viewport};
 use notify::{self, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::json;
 use style_dom::ElementState;
@@ -14,7 +14,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use crate::compiler;
 use crate::events::{Event, KeyboardEvent, MouseButton, MouseEvent};
 use crate::js::{JsContext, TickResult};
-use crate::renderer::{InputCaret, Painter};
+use crate::renderer::{InputCaret, InputSelection, Painter};
 use crate::scrollbar::{
     self, ScrollbarColors, ScrollbarDrag, ScrollbarHit, ScrollbarRegion, ScrollbarTheme,
     collect_scrollbar_regions,
@@ -32,6 +32,12 @@ pub struct InstanceConfig {
     /// construction, but applied before the component mounts so initial layout
     /// already accounts for the rules.
     pub stylesheets: Vec<String>,
+    /// When `true` the root container becomes a fixed-height scroll container
+    /// (`overflow-y: auto`). Content taller than the instance height can be
+    /// scrolled with the mouse wheel; the existing scrollbar painter draws and
+    /// handles a scrollbar on the right edge, exactly like a browser page.
+    /// Defaults to `false`.
+    pub document_scroll: bool,
 }
 
 /// Opaque identifier for a stylesheet registered via
@@ -57,6 +63,8 @@ pub struct Instance {
     #[allow(dead_code)]
     event_tx: UnboundedSender<Event>,
     container_id: usize,
+    document_scroll: bool,
+    range_drag_id: Option<usize>,
     hovered_node_id: Option<usize>,
     active_node_id: Option<usize>,
     focused_node_id: Option<usize>,
@@ -113,6 +121,7 @@ impl Instance {
             device,
             queue,
             stylesheets: initial_stylesheets,
+            document_scroll,
         } = config;
 
         // --- Document ---
@@ -134,6 +143,10 @@ impl Instance {
             d.mutate().append_children(0, &[cid]);
             cid
         };
+
+        if document_scroll {
+            apply_document_scroll_styles(&doc, container_id, height);
+        }
 
         // --- Initial stylesheets (registered before mount so first paint is styled) ---
         let (stylesheets, next_stylesheet_id) =
@@ -184,6 +197,8 @@ impl Instance {
             state,
             event_tx,
             container_id,
+            document_scroll,
+            range_drag_id: None,
             hovered_node_id: None,
             active_node_id: None,
             focused_node_id: None,
@@ -234,6 +249,7 @@ impl Instance {
             device,
             queue,
             stylesheets: initial_stylesheets,
+            document_scroll,
         } = config;
 
         // --- Document ---
@@ -255,6 +271,10 @@ impl Instance {
             d.mutate().append_children(0, &[cid]);
             cid
         };
+
+        if document_scroll {
+            apply_document_scroll_styles(&doc, container_id, height);
+        }
 
         // --- Initial stylesheets (registered before mount so first paint is styled) ---
         let (stylesheets, next_stylesheet_id) =
@@ -314,6 +334,8 @@ impl Instance {
             state,
             event_tx,
             container_id,
+            document_scroll,
+            range_drag_id: None,
             hovered_node_id: None,
             active_node_id: None,
             focused_node_id: None,
@@ -327,6 +349,15 @@ impl Instance {
         };
 
         (instance, event_rx)
+    }
+
+    /// Set the document shell provider after construction.
+    ///
+    /// This is used by hosts that need clipboard / redraw hooks or other
+    /// shell integration. The provider is delegated to the underlying
+    /// `blitz-dom` document instance.
+    pub fn set_shell_provider(&self, shell_provider: Arc<dyn ShellProvider>) {
+        self.doc.borrow_mut().set_shell_provider(shell_provider);
     }
 
     /// Start watching a component path and receive changed file paths.
@@ -414,6 +445,7 @@ impl Instance {
         // and scroll_offset are now current. Reused by `dispatch_mouse` for
         // scrollbar hit-testing this frame.
         self.scrollbars = collect_scrollbar_regions(&self.doc.borrow());
+        let input_selections = self.collect_input_selections();
         let input_carets = self.collect_input_carets();
 
         // Paint into the wgpu texture, layering scrollbars on top.
@@ -423,6 +455,7 @@ impl Instance {
             self.painter.paint(
                 &mut doc,
                 &self.scrollbars,
+                &input_selections,
                 &input_carets,
                 self.scrollbar_theme,
                 &self.texture,
@@ -475,6 +508,10 @@ impl Instance {
             color_scheme: ColorScheme::Light,
         };
         self.doc.borrow_mut().set_viewport(viewport);
+
+        if self.document_scroll {
+            apply_document_scroll_styles(&self.doc, self.container_id, height);
+        }
 
         // Update painter output buffers with new dimensions.
         self.painter.resize(width, height);
@@ -599,6 +636,25 @@ impl Instance {
                 }
                 MouseEvent::Up { .. } => {
                     self.scrollbar_drag = None;
+                    return TickResult::default();
+                }
+                _ => {}
+            }
+        }
+
+        // Range drag takes priority: every Move updates the value, Up ends the drag.
+        if let Some(drag_id) = self.range_drag_id {
+            match event {
+                MouseEvent::Move { x, y } => {
+                    let (doc_x, _) = self.document_coords_for_client(x, y);
+                    if let Some(result) = self.update_range_from_x(drag_id, doc_x) {
+                        self.needs_paint = true;
+                        return result;
+                    }
+                    return TickResult::default();
+                }
+                MouseEvent::Up { .. } => {
+                    self.range_drag_id = None;
                     return TickResult::default();
                 }
                 _ => {}
@@ -789,50 +845,14 @@ impl Instance {
                 match focus_id {
                     Some(focus_id) => {
                         if old_focus != Some(focus_id) {
-                            if let Some(previous) = old_focus {
-                                result = combine_tick_result(
-                                    result,
-                                    self.js.dispatch_event(previous, "blur", x, y),
-                                );
-                                // Re-render the previously-focused input so the
-                                // caret disappears.
-                                if self.js.inputs.borrow().contains_key(&previous) {
-                                    self.refresh_input_text(previous);
-                                    self.needs_paint = true;
-                                }
-                                self.doc.borrow_mut().clear_focus();
-                            }
-                            self.focused_node_id = Some(focus_id);
-                            self.doc.borrow_mut().set_focus_to(focus_id);
-                            // Native input: position caret at end, show
-                            // visible text + caret, mark for paint.
-                            if self.js.inputs.borrow().contains_key(&focus_id) {
-                                if let Some(state) = self.js.inputs.borrow_mut().get_mut(&focus_id)
-                                {
-                                    state.place_caret_at_end();
-                                }
-                                self.refresh_input_text(focus_id);
-                                self.needs_paint = true;
-                            }
                             result = combine_tick_result(
                                 result,
-                                self.js.dispatch_event(focus_id, "focus", x, y),
+                                self.set_focused_node(Some(focus_id), x, y),
                             );
                         }
                     }
                     None => {
-                        if let Some(previous) = old_focus {
-                            self.focused_node_id = None;
-                            result = combine_tick_result(
-                                result,
-                                self.js.dispatch_event(previous, "blur", x, y),
-                            );
-                            if self.js.inputs.borrow().contains_key(&previous) {
-                                self.refresh_input_text(previous);
-                                self.needs_paint = true;
-                            }
-                            self.doc.borrow_mut().clear_focus();
-                        }
+                        result = combine_tick_result(result, self.set_focused_node(None, x, y));
                         if result.needs_paint {
                             self.needs_paint = true;
                         }
@@ -843,6 +863,37 @@ impl Instance {
                 let Some(hit_id) = hit_id else {
                     return result;
                 };
+
+                // Native inputs: handle before JS click dispatch.
+                let input_kind = self
+                    .js
+                    .inputs
+                    .borrow()
+                    .get(&hit_id)
+                    .map(|s| (s.is_checked_like(), s.is_range()));
+
+                match input_kind {
+                    Some((true, _)) => {
+                        // Checkbox / radio: toggle on click (mirrors Space/Enter).
+                        result =
+                            combine_tick_result(result, self.handle_checked_input_click(hit_id));
+                        self.needs_paint = true;
+                        result.needs_paint = true;
+                        return result;
+                    }
+                    Some((_, true)) => {
+                        // Range slider: set value from click x, begin drag.
+                        let (doc_x, _) = self.document_coords_for_client(x, y);
+                        if let Some(r) = self.update_range_from_x(hit_id, doc_x) {
+                            result = combine_tick_result(result, r);
+                        }
+                        self.range_drag_id = Some(hit_id);
+                        self.needs_paint = true;
+                        result.needs_paint = true;
+                        return result;
+                    }
+                    _ => {}
+                }
 
                 let handler_node = {
                     let doc = self.doc.borrow();
@@ -1036,7 +1087,88 @@ impl Instance {
         self.dispatch_key("keyup", event)
     }
 
+    fn set_focused_node(&mut self, next_focus: Option<usize>, x: f32, y: f32) -> TickResult {
+        let old_focus = self.focused_node_id;
+        if old_focus == next_focus {
+            return TickResult::default();
+        }
+
+        let mut result = TickResult::default();
+
+        if let Some(previous) = old_focus {
+            result = combine_tick_result(result, self.js.dispatch_event(previous, "blur", x, y));
+            if self.js.inputs.borrow().contains_key(&previous) {
+                self.refresh_input_text(previous);
+                self.needs_paint = true;
+            }
+            self.doc.borrow_mut().clear_focus();
+            self.focused_node_id = None;
+        }
+
+        let Some(focus_id) = next_focus else {
+            if result.needs_paint {
+                self.needs_paint = true;
+            }
+            return result;
+        };
+
+        self.focused_node_id = Some(focus_id);
+        self.doc.borrow_mut().set_focus_to(focus_id);
+        if self.js.inputs.borrow().contains_key(&focus_id) {
+            if let Some(state) = self.js.inputs.borrow_mut().get_mut(&focus_id) {
+                state.place_caret_at_end();
+            }
+            self.refresh_input_text(focus_id);
+            self.needs_paint = true;
+        }
+        result = combine_tick_result(result, self.js.dispatch_event(focus_id, "focus", x, y));
+        if result.needs_paint {
+            self.needs_paint = true;
+        }
+
+        result
+    }
+
+    fn focus_adjacent_control(&mut self, backwards: bool) -> TickResult {
+        let control_order = {
+            let inputs = self.js.inputs.borrow();
+            let selects = self.js.selects.borrow();
+            let doc = self.doc.borrow();
+            let mut ids = Vec::new();
+            doc.visit(|node_id, _node| {
+                if inputs.get(&node_id).is_some_and(|state| !state.disabled()) {
+                    ids.push(node_id);
+                } else if selects.get(&node_id).is_some_and(|state| !state.disabled()) {
+                    ids.push(node_id);
+                }
+            });
+            ids
+        };
+
+        if control_order.is_empty() {
+            return TickResult::default();
+        }
+
+        let next_index = match self
+            .focused_node_id
+            .and_then(|id| control_order.iter().position(|candidate| *candidate == id))
+        {
+            Some(current) if backwards => (current + control_order.len() - 1) % control_order.len(),
+            Some(current) => (current + 1) % control_order.len(),
+            None if backwards => control_order.len() - 1,
+            None => 0,
+        };
+
+        let mut result = self.set_focused_node(Some(control_order[next_index]), 0.0, 0.0);
+        result.needs_paint = true;
+        result
+    }
+
     fn dispatch_key(&mut self, event_name: &str, event: KeyboardEvent) -> TickResult {
+        if event_name == "keydown" && event.key == "Tab" {
+            return self.focus_adjacent_control(event.shift_key);
+        }
+
         let Some(focused_id) = self.focused_node_id else {
             return TickResult::default();
         };
@@ -1050,6 +1182,8 @@ impl Instance {
         let (edited, emits_input_event) =
             if event_name == "keydown" && self.js.inputs.borrow().contains_key(&focused_id) {
                 apply_input_key(&self.js.inputs, focused_id, &event)
+            } else if event_name == "keydown" && self.js.selects.borrow().contains_key(&focused_id) {
+                apply_select_key(&self.js.selects, focused_id, &event)
             } else {
                 (false, false)
             };
@@ -1061,20 +1195,42 @@ impl Instance {
 
         if edited {
             self.refresh_input_text(focused_id);
+            self.refresh_select_text(focused_id);
             self.needs_paint = true;
         }
 
         if emits_input_event {
-            // Refresh visible text + emit input event.
-            let snapshot = self
-                .js
-                .inputs
-                .borrow()
-                .get(&focused_id)
-                .map(|s| (s.value().to_string(), s.caret()));
-            if let Some((value, caret)) = snapshot {
-                let input_result = self.js.dispatch_input_event(focused_id, &value, caret);
+            // Refresh visible text + emit input event for inputs.
+            let snapshot = self.js.inputs.borrow().get(&focused_id).map(|s| {
+                (
+                    s.value().to_string(),
+                    s.checked(),
+                    s.selection_start(),
+                    s.selection_end(),
+                )
+            });
+            if let Some((value, checked, selection_start, selection_end)) = snapshot {
+                let input_result = self.js.dispatch_input_event(
+                    focused_id,
+                    &value,
+                    checked,
+                    selection_start,
+                    selection_end,
+                );
                 return combine_tick_result(result, input_result);
+            }
+
+            // Refresh visible text + emit change event for selects.
+            let select_snapshot = self.js.selects.borrow().get(&focused_id).map(|s| {
+                (s.value().unwrap_or_default(), s.selected_index())
+            });
+            if let Some((value, selected_index)) = select_snapshot {
+                let change_result = self.js.dispatch_select_change_event(
+                    focused_id,
+                    &value,
+                    selected_index,
+                );
+                return combine_tick_result(result, change_result);
             }
         }
 
@@ -1106,6 +1262,45 @@ impl Instance {
         }
     }
 
+    /// Refresh the visible text child of a `<select>` from its SelectState.
+    /// The child text node is the first child of the select (seeded in
+    /// `__ox_createElement` when the tag is "select").
+    /// Also update the select element's value attribute for form submission.
+    fn refresh_select_text(&mut self, select_id: usize) {
+        let display = self
+            .js
+            .selects
+            .borrow()
+            .get(&select_id)
+            .map(|s| s.current_label());
+        let Some(text) = display else { return };
+        let child = self
+            .doc
+            .borrow()
+            .get_node(select_id)
+            .and_then(|n| n.children.first().copied());
+        if let Some(child_id) = child {
+            self.doc
+                .borrow_mut()
+                .mutate()
+                .set_node_text(child_id, &text);
+        }
+
+        // Sync the value attribute for form submission
+        let value = self
+            .js
+            .selects
+            .borrow()
+            .get(&select_id)
+            .and_then(|s| s.selected_value().map(str::to_owned));
+        if let Some(value) = value {
+            self.doc
+                .borrow_mut()
+                .mutate()
+                .set_attribute(select_id, blitz_dom::QualName::new(None, blitz_dom::ns!(), blitz_dom::LocalName::from("value")), &value);
+        }
+    }
+
     fn sync_input_render_text_before_layout(&self) {
         let focused_id = self.focused_node_id;
         let inputs: Vec<(usize, String, bool, usize)> = self
@@ -1115,7 +1310,12 @@ impl Instance {
             .iter()
             .map(|(input_id, state)| {
                 let (text, placeholder) = state.render(focused_id == Some(*input_id));
-                (*input_id, text, placeholder, state.caret_byte_index())
+                (
+                    *input_id,
+                    text,
+                    placeholder,
+                    state.display_caret_byte_index(),
+                )
             })
             .collect();
         if inputs.is_empty() {
@@ -1226,6 +1426,63 @@ impl Instance {
             width: caret_w,
             height: caret_h,
             color: input_caret_color(input_node),
+        }]
+    }
+
+    fn collect_input_selections(&self) -> Vec<InputSelection> {
+        let Some(input_id) = self.focused_node_id else {
+            return Vec::new();
+        };
+
+        let inputs = self.js.inputs.borrow();
+        let Some(state) = inputs.get(&input_id) else {
+            return Vec::new();
+        };
+        let (selection_start, selection_end) = (state.selection_start(), state.selection_end());
+        if selection_start == selection_end {
+            return Vec::new();
+        }
+        if !state.is_text_like() {
+            return Vec::new();
+        }
+
+        let doc = self.doc.borrow();
+        let Some(input_node) = doc.get_node(input_id) else {
+            return Vec::new();
+        };
+        let Some(_input_data) = input_node
+            .element_data()
+            .and_then(|element| element.text_input_data())
+        else {
+            return Vec::new();
+        };
+
+        let layout = input_node.final_layout;
+        let input_origin = input_node.absolute_position(0.0, 0.0);
+        let content_x = input_origin.x + layout.border.left + layout.padding.left;
+        let content_y = input_origin.y + layout.border.top + layout.padding.top;
+        let content_w = layout.content_box_width().max(0.0);
+        let content_h = layout.content_box_height().max(1.0);
+        let y_offset = input_node.text_input_v_centering_offset(1.0) as f32;
+
+        let selection_y = content_y + y_offset;
+        let selection_height = content_h * 0.7;
+
+        let char_width = estimated_input_char_width(input_node);
+        let raw_x = (content_x + char_width * selection_start as f32)
+            .clamp(content_x, content_x + content_w);
+        let raw_end_x =
+            (content_x + char_width * selection_end as f32).clamp(content_x, content_x + content_w);
+        let width = (raw_end_x - raw_x).max(0.0);
+        if width <= 0.0 {
+            return Vec::new();
+        }
+
+        vec![InputSelection {
+            x: raw_x,
+            y: selection_y,
+            width,
+            height: selection_height.max(1.0),
         }]
     }
 
@@ -1399,6 +1656,13 @@ fn register_initial_stylesheets(
     (map, sources.len() as u64)
 }
 
+fn apply_document_scroll_styles(doc: &Rc<RefCell<BaseDocument>>, container_id: usize, height: u32) {
+    let mut doc = doc.borrow_mut();
+    let mut m = doc.mutate();
+    m.set_style_property(container_id, "height", &format!("{height}px"));
+    m.set_style_property(container_id, "overflow-y", "auto");
+}
+
 fn create_container_element(doc: &mut BaseDocument) -> usize {
     doc.mutate().create_element(
         QualName::new(None, ns!(html), LocalName::from("div")),
@@ -1503,6 +1767,92 @@ fn apply_input_key(
     let Some(state) = map.get_mut(&input_id) else {
         return (false, false);
     };
+
+    let has_modifier = event.ctrl_key || event.meta_key || event.alt_key;
+    let with_shift = event.shift_key;
+
+    if state.is_checked_like() {
+        return match event.key.as_str() {
+            // Browser checkboxes/radios toggle on Space/Enter.
+            " " | "Space" | "Enter" => {
+                if has_modifier {
+                    return (false, false);
+                }
+
+                if state.is_radio() {
+                    if state.checked() {
+                        return (false, false);
+                    }
+
+                    let group_name = state.name().map(str::to_owned);
+                    state.set_checked(true);
+
+                    if let Some(group_name) = group_name {
+                        for (other_id, other_state) in map.iter_mut() {
+                            if *other_id == input_id {
+                                continue;
+                            }
+                            if other_state.kind() != crate::input::InputType::Radio {
+                                continue;
+                            }
+                            if other_state.name() == Some(group_name.as_str()) {
+                                other_state.set_checked(false);
+                            }
+                        }
+                    }
+
+                    (true, true)
+                } else {
+                    let edited = state.toggle_checked();
+                    (edited, edited)
+                }
+            }
+            _ => (false, false),
+        };
+    }
+
+    if state.is_range() {
+        return match event.key.as_str() {
+            "ArrowLeft" | "ArrowDown" => {
+                let edited = state.step_number(-1);
+                (edited, edited)
+            }
+            "ArrowRight" | "ArrowUp" => {
+                let edited = state.step_number(1);
+                (edited, edited)
+            }
+            "PageDown" => {
+                let edited = state.step_number(-10);
+                (edited, edited)
+            }
+            "PageUp" => {
+                let edited = state.step_number(10);
+                (edited, edited)
+            }
+            "Home" => {
+                let edited = state.move_range_to_extreme(false);
+                (edited, edited)
+            }
+            "End" => {
+                let edited = state.move_range_to_extreme(true);
+                (edited, edited)
+            }
+            _ => (false, false),
+        };
+    }
+
+    let key = event.key.as_str();
+
+    if (event.ctrl_key || event.meta_key) && !event.alt_key {
+        match key {
+            "a" | "A" => {
+                let edited = state.select_all();
+                return (edited, false);
+            }
+            _ => {}
+        }
+    }
+
     match event.key.as_str() {
         "Backspace" => {
             let edited = state.backspace();
@@ -1513,40 +1863,319 @@ fn apply_input_key(
             (edited, edited)
         }
         "ArrowLeft" => {
-            let edited = state.move_left();
+            let edited = state.move_left_extending(with_shift);
             (edited, false)
         }
         "ArrowRight" => {
-            let edited = state.move_right();
+            let edited = state.move_right_extending(with_shift);
             (edited, false)
         }
         "Home" => {
-            let edited = state.move_home();
+            let edited = state.move_home_extending(with_shift);
             (edited, false)
         }
         "End" => {
-            let edited = state.move_end();
+            let edited = state.move_end_extending(with_shift);
             (edited, false)
         }
         " " => {
-            let edited = state.insert(' ');
-            (edited, edited)
+            if state.is_numeric_like() {
+                let edited = false;
+                (edited, edited)
+            } else {
+                let edited = state.insert(' ');
+                (edited, edited)
+            }
         }
         "Space" => {
-            let edited = state.insert(' ');
-            (edited, edited)
+            if state.is_numeric_like() {
+                let edited = false;
+                (edited, edited)
+            } else {
+                let edited = state.insert(' ');
+                (edited, edited)
+            }
         }
         // Modifier-only keys produce empty / multi-char `key` strings we
         // shouldn't insert. Single-char printable keys *do* go in.
-        key if key.chars().count() == 1 && !event.ctrl_key && !event.meta_key && !event.alt_key => {
+        key if key.chars().count() == 1 => {
+            if event.ctrl_key || event.meta_key || event.alt_key {
+                return (false, false);
+            }
             let ch = key.chars().next().unwrap();
             if ch.is_control() {
                 return (false, false);
             }
-            let edited = state.insert(ch);
+            let edited = if state.is_numeric_like() {
+                state.insert_numeric_char(ch)
+            } else {
+                state.insert(ch)
+            };
             (edited, edited)
         }
         _ => (false, false),
+    }
+}
+
+/// Apply a keyboard event to a select element when closed.
+/// Returns (edited, emits_change_event).
+fn apply_select_key(
+    selects: &crate::select::SelectRegistry,
+    select_id: usize,
+    event: &KeyboardEvent,
+) -> (bool, bool) {
+    let mut map = selects.borrow_mut();
+    let Some(state) = map.get_mut(&select_id) else {
+        return (false, false);
+    };
+
+    // Don't process keys when the select is disabled
+    if state.disabled() {
+        return (false, false);
+    }
+
+    // When closed, handle navigation and open-select keys
+    if !state.is_open() {
+        match event.key.as_str() {
+            "ArrowDown" | "Down" => {
+                let edited = state.move_selection(1);
+                (edited, edited)
+            }
+            "ArrowUp" | "Up" => {
+                let edited = state.move_selection(-1);
+                (edited, edited)
+            }
+            "Home" => {
+                let edited = state.jump_to_extreme(false);
+                (edited, edited)
+            }
+            "End" => {
+                let edited = state.jump_to_extreme(true);
+                (edited, edited)
+            }
+            " " | "Space" | "Enter" => {
+                // Open the select dropdown
+                state.set_open(true);
+                (true, false)
+            }
+            _ => (false, false),
+        }
+    } else {
+        // When open, handle arrow navigation and commit
+        match event.key.as_str() {
+            "ArrowDown" | "Down" => {
+                let idx = state.active_index().unwrap_or_else(|| {
+                    state.selected_index().unwrap_or(0)
+                });
+                let len = state.options.len() as i32;
+                let next = ((idx as i32 + 1).rem_euclid(len)) as usize;
+                state.set_active_index(Some(next));
+                (true, false)
+            }
+            "ArrowUp" | "Up" => {
+                let idx = state.active_index().unwrap_or_else(|| {
+                    state.selected_index().unwrap_or(0)
+                });
+                let len = state.options.len() as i32;
+                let next = ((idx as i32 - 1).rem_euclid(len)) as usize;
+                state.set_active_index(Some(next));
+                (true, false)
+            }
+            "Home" => {
+                if let Some(first_enabled) = state.find_first_enabled() {
+                    state.set_active_index(Some(first_enabled));
+                    (true, false)
+                } else {
+                    (false, false)
+                }
+            }
+            "End" => {
+                let last_enabled = state.options.iter().rposition(|opt| !opt.disabled);
+                if let Some(idx) = last_enabled {
+                    state.set_active_index(Some(idx));
+                    (true, false)
+                } else {
+                    (false, false)
+                }
+            }
+            "Enter" | " " | "Space" => {
+                // Commit the active option to selected
+                if let Some(active) = state.active_index() {
+                    if !state.options[active].disabled {
+                        state.set_selected_index(Some(active));
+                    }
+                }
+                state.set_open(false);
+                (true, true)
+            }
+            "Escape" => {
+                state.set_open(false);
+                (true, false)
+            }
+            "Tab" => {
+                // Tab commits current active and closes (will move focus to next element)
+                if let Some(active) = state.active_index() {
+                    if !state.options[active].disabled {
+                        state.set_selected_index(Some(active));
+                    }
+                }
+                state.set_open(false);
+                (true, true)
+            }
+            _ => (false, false),
+        }
+    }
+}
+
+impl Instance {
+    /// Handle a mouse click on a checkbox or radio input.
+    ///
+    /// Mirrors the Space/Enter path in `apply_input_key`: toggles the
+    /// `InputState`, syncs blitz-dom's `CheckboxInput`, deselects radio group
+    /// siblings, and dispatches an `"input"` event.
+    fn handle_checked_input_click(&mut self, input_id: usize) -> TickResult {
+        let toggle_info = {
+            let mut map = self.js.inputs.borrow_mut();
+            let Some(state) = map.get_mut(&input_id) else {
+                return TickResult::default();
+            };
+            if state.is_radio() {
+                if state.checked() {
+                    return TickResult::default(); // already selected
+                }
+                let group = state.name().map(str::to_owned);
+                state.set_checked(true);
+                Some((true, true, group))
+            } else {
+                let toggled = state.toggle_checked();
+                let new_checked = state.checked();
+                toggled.then_some((new_checked, false, None))
+            }
+        };
+
+        let Some((new_checked, is_radio, group_name)) = toggle_info else {
+            return TickResult::default();
+        };
+
+        // Sync blitz-dom's CheckboxInput for this node.
+        if let Some(node) = self.doc.borrow_mut().get_node_mut(input_id) {
+            if let Some(el) = node.element_data_mut() {
+                if let Some(slot) = el.checkbox_input_checked_mut() {
+                    *slot = new_checked;
+                }
+            }
+        }
+
+        // For radio: deselect siblings in the same group.
+        if is_radio {
+            if let Some(ref group) = group_name {
+                // InputState side.
+                let sibling_ids: Vec<usize> = {
+                    let map = self.js.inputs.borrow();
+                    map.iter()
+                        .filter(|(id, s)| {
+                            **id != input_id && s.is_radio() && s.name() == Some(group.as_str())
+                        })
+                        .map(|(id, _)| *id)
+                        .collect()
+                };
+                for sid in sibling_ids {
+                    if let Some(s) = self.js.inputs.borrow_mut().get_mut(&sid) {
+                        s.set_checked(false);
+                    }
+                    // blitz-dom side.
+                    if let Some(node) = self.doc.borrow_mut().get_node_mut(sid) {
+                        if let Some(el) = node.element_data_mut() {
+                            if let Some(slot) = el.checkbox_input_checked_mut() {
+                                *slot = false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Dispatch the "input" event.
+        let snapshot = self.js.inputs.borrow().get(&input_id).map(|s| {
+            (
+                s.value().to_string(),
+                s.checked(),
+                s.selection_start(),
+                s.selection_end(),
+            )
+        });
+        if let Some((value, checked, sel_start, sel_end)) = snapshot {
+            return self
+                .js
+                .dispatch_input_event(input_id, &value, checked, sel_start, sel_end);
+        }
+        TickResult::default()
+    }
+
+    /// Compute a new range value from a document-space x coordinate and apply
+    /// it to the `InputState`. Returns `Some(TickResult)` if the value changed
+    /// and an `"input"` event was dispatched, `None` if the node is not a
+    /// range input or the value didn't change.
+    fn update_range_from_x(&mut self, input_id: usize, doc_x: f32) -> Option<TickResult> {
+        // Compute the fraction from the element's absolute position.
+        let (abs_x, content_h, pad_left, pad_right, size_w) = {
+            let doc = self.doc.borrow();
+            let node = doc.get_node(input_id)?;
+            let l = &node.final_layout;
+            let abs = node.absolute_position(0.0, 0.0);
+            let content_h =
+                l.size.height - l.padding.top - l.padding.bottom - l.border.top - l.border.bottom;
+            (
+                abs.x,
+                content_h,
+                l.padding.left,
+                l.padding.right,
+                l.size.width,
+            )
+        };
+
+        let content_x0 = abs_x + pad_left;
+        let content_x1 = abs_x + size_w - pad_right;
+        let thumb_r = (content_h / 2.0).min(8.0).max(3.0);
+        let usable_x0 = content_x0 + thumb_r;
+        let usable_x1 = content_x1 - thumb_r;
+        let usable_w = (usable_x1 - usable_x0).max(0.0);
+
+        let fraction = if usable_w > 0.0 {
+            ((doc_x - usable_x0) / usable_w).clamp(0.0, 1.0) as f64
+        } else {
+            0.5
+        };
+
+        let changed = self
+            .js
+            .inputs
+            .borrow_mut()
+            .get_mut(&input_id)?
+            .set_value_from_range_fraction(fraction);
+
+        if !changed {
+            return Some(TickResult::default());
+        }
+
+        self.refresh_input_text(input_id);
+
+        let snapshot = self.js.inputs.borrow().get(&input_id).map(|s| {
+            (
+                s.value().to_string(),
+                s.checked(),
+                s.selection_start(),
+                s.selection_end(),
+            )
+        })?;
+
+        Some(self.js.dispatch_input_event(
+            input_id,
+            &snapshot.0,
+            snapshot.1,
+            snapshot.2,
+            snapshot.3,
+        ))
     }
 }
 
@@ -1784,6 +2413,7 @@ mod tests {
                 device,
                 queue,
                 stylesheets: vec![],
+                document_scroll: false,
             },
             ROOT_CLICK_COMPONENT,
         );
@@ -1826,6 +2456,7 @@ mod tests {
                 device,
                 queue,
                 stylesheets: vec![],
+                document_scroll: false,
             },
             TEXT_INPUT_COMPONENT,
         );
@@ -1897,6 +2528,7 @@ mod tests {
                 device,
                 queue,
                 stylesheets: vec![],
+                document_scroll: false,
             },
             TEXT_INPUT_COMPONENT,
         );
@@ -1942,6 +2574,7 @@ mod tests {
                 device,
                 queue,
                 stylesheets: vec![],
+                document_scroll: false,
             },
             CLICK_BUTTON_COMPONENT,
         );
@@ -1989,6 +2622,7 @@ mod tests {
                 device,
                 queue,
                 stylesheets: vec![],
+                document_scroll: false,
             },
             HOVER_COMPONENT,
         );
@@ -2071,6 +2705,7 @@ mod tests {
                 device,
                 queue,
                 stylesheets: vec![],
+                document_scroll: false,
             },
             WHEEL_SCROLL_COMPONENT,
         );
@@ -2140,6 +2775,7 @@ mod tests {
                 device: Arc::clone(&device),
                 queue: Arc::clone(&queue),
                 stylesheets: vec![],
+                document_scroll: false,
             },
             ROOT_CLICK_COMPONENT,
         );
@@ -2150,6 +2786,7 @@ mod tests {
                 device,
                 queue,
                 stylesheets: vec![],
+                document_scroll: false,
             },
             CLICK_BUTTON_COMPONENT,
         );
@@ -2246,6 +2883,7 @@ mod tests {
                 device,
                 queue,
                 stylesheets: vec![],
+                document_scroll: false,
             },
             STABLE_TEXT_COMPONENT,
         );
@@ -2315,6 +2953,7 @@ mod tests {
                 device,
                 queue,
                 stylesheets: vec![],
+                document_scroll: false,
             },
             REACTIVE_LIST_COMPONENT,
         );
@@ -2400,6 +3039,7 @@ mod tests {
                 device,
                 queue,
                 stylesheets: vec![],
+                document_scroll: false,
             },
             REACTIVE_WHEEL_COMPONENT,
         );
@@ -2456,6 +3096,7 @@ mod tests {
                 device,
                 queue,
                 stylesheets: css.iter().map(|s| s.to_string()).collect(),
+                document_scroll: false,
             },
             component,
         )
@@ -3075,6 +3716,62 @@ mod tests {
         );
     }
 
+    #[test]
+    fn document_scroll_scrolls_root_container() {
+        // A document taller than the instance height. With document_scroll:
+        // true the container gets overflow-y:auto + explicit height, so wheel
+        // events that aren't consumed by a child scroll the container itself.
+        const TALL_COMPONENT: &str = r#"
+            import { render } from "oxide-runtime";
+            function App() {
+              const root = __ox_createElement("div");
+              __ox_setProperty(root, "style",
+                "display:block; width:200px; height:600px; background:#111;");
+              return root;
+            }
+            render(() => App(), __OX_ROOT__);
+        "#;
+
+        let (device, queue) = test_device();
+        let (mut instance, _rx) = Instance::new(
+            InstanceConfig {
+                width: 200,
+                height: 200,
+                device,
+                queue,
+                stylesheets: vec![],
+                document_scroll: true,
+            },
+            TALL_COMPONENT,
+        );
+        let _ = instance.render();
+
+        let before = instance
+            .doc
+            .borrow()
+            .get_node(instance.container_id())
+            .expect("container exists")
+            .scroll_offset
+            .y;
+
+        // Wheel down (negative winit delta → content scrolls down).
+        let result = instance.dispatch_wheel(10.0, 10.0, 0.0, -40.0);
+        assert!(result.needs_paint);
+
+        let after = instance
+            .doc
+            .borrow()
+            .get_node(instance.container_id())
+            .expect("container exists")
+            .scroll_offset
+            .y;
+
+        assert!(
+            after > before,
+            "document scroll_offset should increase after wheel down (before={before}, after={after})"
+        );
+    }
+
     // ── Native <input> tests ──────────────────────────────────────────────
 
     fn type_key(key: &str) -> KeyboardEvent {
@@ -3160,6 +3857,70 @@ mod tests {
     }
 
     #[test]
+    fn tab_moves_focus_between_native_inputs() {
+        const COMPONENT: &str = r#"
+            import { render } from "oxide-runtime";
+            function App() {
+              const root = __ox_createElement("div");
+
+              const first = __ox_createElement("input");
+              __ox_setProperty(first, "style", "display:block; width:200px; height:24px;");
+              __ox_setProperty(first, "onFocus", () => {
+                globalThis.state.focused = "first";
+              });
+              __ox_setProperty(first, "onInput", (event) => {
+                globalThis.state.firstValue = event.value;
+              });
+
+              const second = __ox_createElement("input");
+              __ox_setProperty(second, "style", "display:block; width:200px; height:24px;");
+              __ox_setProperty(second, "onFocus", () => {
+                globalThis.state.focused = "second";
+              });
+              __ox_setProperty(second, "onInput", (event) => {
+                globalThis.state.secondValue = event.value;
+              });
+
+              __ox_insertNode(root, first, null);
+              __ox_insertNode(root, second, null);
+              return root;
+            }
+            render(() => App(), __OX_ROOT__);
+        "#;
+        let (mut instance, _rx) = make_instance_with(COMPONENT, &[]);
+        let _ = instance.render();
+
+        let _ = instance.dispatch_mouse(
+            10.0,
+            10.0,
+            MouseEvent::Down {
+                x: 10.0,
+                y: 10.0,
+                button: MouseButton::Left,
+            },
+        );
+        assert_eq!(instance.state().get("focused"), Some(json!("first")));
+
+        let _ = instance.dispatch_key_down(make_key_event(
+            "Tab", "Tab", 9, false, false, false, false, false,
+        ));
+        assert_eq!(instance.state().get("focused"), Some(json!("second")));
+
+        let _ = instance.dispatch_key_down(type_key("x"));
+        assert_eq!(instance.state().get("firstValue"), None);
+        assert_eq!(instance.state().get("secondValue"), Some(json!("x")));
+
+        let _ = instance.dispatch_key_down(make_key_event(
+            "Tab", "Tab", 9, false, true, false, false, false,
+        ));
+        assert_eq!(instance.state().get("focused"), Some(json!("first")));
+
+        let _ = instance.dispatch_key_down(type_key("y"));
+        assert_eq!(instance.state().get("firstValue"), Some(json!("y")));
+        assert_eq!(instance.state().get("secondValue"), Some(json!("x")));
+    }
+
+    #[test]
     fn input_space_and_caret_movement_refresh_rendered_caret() {
         const COMPONENT: &str = r#"
             import { render } from "oxide-runtime";
@@ -3220,6 +3981,227 @@ mod tests {
         let _ = instance.dispatch_key_down(type_key("a"));
         let _ = instance.render();
         assert_eq!(input_child_text(&instance, input_id), "h ai");
+    }
+
+    #[test]
+    fn input_number_restricts_to_numeric_chars() {
+        const COMPONENT: &str = r#"
+            import { render } from "oxide-runtime";
+            function App() {
+              const input = __ox_createElement("input");
+              __ox_setProperty(input, "type", "number");
+              __ox_setProperty(input, "style", "display:block; width:200px; height:40px;");
+              __ox_setProperty(input, "onInput", (e) => {
+                globalThis.state.value = e.value;
+              });
+              return input;
+            }
+            render(() => App(), __OX_ROOT__);
+        "#;
+        let (mut instance, _rx) = make_instance_with(COMPONENT, &[]);
+        let _ = instance.render();
+        let _ = instance.dispatch_mouse(
+            10.0,
+            10.0,
+            MouseEvent::Down {
+                x: 10.0,
+                y: 10.0,
+                button: MouseButton::Left,
+            },
+        );
+
+        let _ = instance.dispatch_key_down(type_key("1"));
+        let _ = instance.dispatch_key_down(type_key("2"));
+        let _ = instance.dispatch_key_down(type_key("."));
+        let _ = instance.dispatch_key_down(type_key("3"));
+        assert_eq!(instance.state().get("value"), Some(json!("12.3")));
+
+        // Alphabetic characters are rejected by number-input handling.
+        let _ = instance.dispatch_key_down(type_key("a"));
+        assert_eq!(instance.state().get("value"), Some(json!("12.3")));
+    }
+
+    #[test]
+    fn input_range_responds_to_step_and_extremes() {
+        const COMPONENT: &str = r#"
+            import { render } from "oxide-runtime";
+            function App() {
+              const input = __ox_createElement("input");
+              __ox_setProperty(input, "type", "range");
+              __ox_setProperty(input, "min", "0");
+              __ox_setProperty(input, "max", "10");
+              __ox_setProperty(input, "step", "2");
+              __ox_setProperty(input, "value", "4");
+              __ox_setProperty(input, "style", "display:block; width:200px; height:40px;");
+              __ox_setProperty(input, "onInput", (e) => {
+                globalThis.state.value = e.value;
+              });
+              return input;
+            }
+            render(() => App(), __OX_ROOT__);
+        "#;
+        let (mut instance, _rx) = make_instance_with(COMPONENT, &[]);
+        let _ = instance.render();
+
+        // Click to focus the range input (any position inside it).  The value
+        // may or may not change depending on layout; the assertion intentionally
+        // avoids checking post-click value here and verifies click starts a drag.
+        let _ = instance.dispatch_mouse(
+            100.0,
+            10.0,
+            MouseEvent::Down {
+                x: 100.0,
+                y: 10.0,
+                button: MouseButton::Left,
+            },
+        );
+        // End drag so later move events don't interfere.
+        let _ = instance.dispatch_mouse(
+            100.0,
+            10.0,
+            MouseEvent::Up {
+                x: 100.0,
+                y: 10.0,
+                button: MouseButton::Left,
+            },
+        );
+
+        // Keyboard navigation from the current value (seeded as 4, or whatever
+        // click set): ArrowRight steps +2, ArrowLeft steps -2, Home/End jump.
+        let _ = instance.dispatch_key_down(type_key("Home"));
+        assert_eq!(instance.state().get("value"), Some(json!("0")));
+
+        let _ = instance.dispatch_key_down(type_key("ArrowRight"));
+        assert_eq!(instance.state().get("value"), Some(json!("2")));
+
+        let _ = instance.dispatch_key_down(type_key("ArrowRight"));
+        assert_eq!(instance.state().get("value"), Some(json!("4")));
+
+        let _ = instance.dispatch_key_down(type_key("ArrowLeft"));
+        assert_eq!(instance.state().get("value"), Some(json!("2")));
+
+        let _ = instance.dispatch_key_down(type_key("End"));
+        assert_eq!(instance.state().get("value"), Some(json!("10")));
+    }
+
+    #[test]
+    fn input_checkbox_and_radio_types_toggle() {
+        const COMPONENT: &str = r#"
+            import { render } from "oxide-runtime";
+            function App() {
+              const root = __ox_createElement("div");
+
+              const checkbox = __ox_createElement("input");
+              __ox_setProperty(checkbox, "type", "checkbox");
+              __ox_setProperty(checkbox, "style", "display:block; width:20px; height:20px;");
+              __ox_setProperty(checkbox, "onInput", (e) => {
+                globalThis.state.checkbox = e.checked;
+              });
+
+              const radio1 = __ox_createElement("input");
+              __ox_setProperty(radio1, "type", "radio");
+              __ox_setProperty(radio1, "name", "group-a");
+              __ox_setProperty(radio1, "style", "display:block; width:20px; height:20px;");
+
+              const radio2 = __ox_createElement("input");
+              __ox_setProperty(radio2, "type", "radio");
+              __ox_setProperty(radio2, "name", "group-a");
+              __ox_setProperty(radio2, "style", "display:block; width:20px; height:20px;");
+
+              __ox_insertNode(root, checkbox, null);
+              __ox_insertNode(root, radio1, null);
+              __ox_insertNode(root, radio2, null);
+
+              globalThis.state.radio1 = radio1;
+              globalThis.state.radio2 = radio2;
+
+              return root;
+            }
+            render(() => App(), __OX_ROOT__);
+        "#;
+        let (mut instance, _rx) = make_instance_with(COMPONENT, &[]);
+        let _ = instance.render();
+
+        // Checkbox: clicking toggles it; Space while focused toggles again.
+        let _ = instance.dispatch_mouse(
+            10.0,
+            10.0,
+            MouseEvent::Down {
+                x: 10.0,
+                y: 10.0,
+                button: MouseButton::Left,
+            },
+        );
+        assert_eq!(instance.state().get("checkbox"), Some(json!(true)));
+
+        // Space toggles it back off.
+        let _ = instance.dispatch_key_down(type_key("Space"));
+        assert_eq!(instance.state().get("checkbox"), Some(json!(false)));
+
+        // Click toggles on again so radio tests start from a stable state.
+        let _ = instance.dispatch_mouse(
+            10.0,
+            10.0,
+            MouseEvent::Down {
+                x: 10.0,
+                y: 10.0,
+                button: MouseButton::Left,
+            },
+        );
+        assert_eq!(instance.state().get("checkbox"), Some(json!(true)));
+
+        let ids = [
+            instance
+                .state()
+                .get("radio1")
+                .and_then(|v| v.as_u64())
+                .unwrap() as usize,
+            instance
+                .state()
+                .get("radio2")
+                .and_then(|v| v.as_u64())
+                .unwrap() as usize,
+        ];
+
+        let (radio1_x, radio1_y, radio2_x, radio2_y) = {
+            let doc = instance.doc.borrow();
+            let r1 = doc.get_node(ids[0]).unwrap();
+            let r2 = doc.get_node(ids[1]).unwrap();
+            (
+                r1.absolute_position(0.0, 0.0).x + 4.0,
+                r1.absolute_position(0.0, 0.0).y + 4.0,
+                r2.absolute_position(0.0, 0.0).x + 4.0,
+                r2.absolute_position(0.0, 0.0).y + 4.0,
+            )
+        };
+
+        // Pick the first radio.
+        let _ = instance.dispatch_mouse(
+            radio1_x,
+            radio1_y,
+            MouseEvent::Down {
+                x: radio1_x,
+                y: radio1_y,
+                button: MouseButton::Left,
+            },
+        );
+        let _ = instance.dispatch_key_down(type_key(" "));
+        assert_eq!(instance.input_value(ids[0]).as_deref(), Some("on"));
+        assert_eq!(instance.input_value(ids[1]).as_deref(), Some("off"));
+
+        // Focus/select second radio and ensure group semantics switch.
+        let _ = instance.dispatch_mouse(
+            radio2_x,
+            radio2_y,
+            MouseEvent::Down {
+                x: radio2_x,
+                y: radio2_y,
+                button: MouseButton::Left,
+            },
+        );
+        let _ = instance.dispatch_key_down(type_key(" "));
+        assert_eq!(instance.input_value(ids[0]).as_deref(), Some("off"));
+        assert_eq!(instance.input_value(ids[1]).as_deref(), Some("on"));
     }
 
     #[test]

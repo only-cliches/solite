@@ -16,6 +16,14 @@ pub(crate) struct InputCaret {
     pub color: peniko::Color,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InputSelection {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 /// Renderer: blitz-dom layout + paint → CPU RGBA8 buffer → upload to a wgpu texture.
 pub(crate) struct Painter {
     queue: std::sync::Arc<wgpu::Queue>,
@@ -53,6 +61,7 @@ impl Painter {
         &mut self,
         document: &mut BaseDocument,
         scrollbars: &[ScrollbarRegion],
+        input_selections: &[InputSelection],
         input_carets: &[InputCaret],
         theme_override: Option<ScrollbarColors>,
         target: &wgpu::Texture,
@@ -60,6 +69,7 @@ impl Painter {
         self.vello.render(
             |scene| {
                 blitz_paint::paint_scene(scene, document, 1.0, self.width, self.height, 0, 0);
+                paint_input_selections(scene, input_selections, 1.0);
                 paint_input_carets(scene, input_carets, 1.0);
                 crate::scrollbar::paint_scrollbars(
                     scene,
@@ -128,6 +138,19 @@ impl Painter {
         self.cpu_buffer.resize((width * height * 4) as usize, 0);
         self.padded_buffer.clear();
         self.vello.resize(width, height);
+    }
+}
+
+fn paint_input_selections<S: PaintScene>(scene: &mut S, selections: &[InputSelection], scale: f64) {
+    let color = peniko::Color::from_rgba8(180, 213, 255, 150);
+    for selection in selections {
+        let rect = Rect::new(
+            selection.x as f64,
+            selection.y as f64,
+            (selection.x + selection.width) as f64,
+            (selection.y + selection.height) as f64,
+        );
+        scene.fill(Fill::NonZero, Affine::scale(scale), color, None, &rect);
     }
 }
 

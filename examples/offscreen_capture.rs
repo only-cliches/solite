@@ -83,6 +83,7 @@ fn main() {
             device: device.clone(),
             queue: queue.clone(),
             stylesheets: vec![HELLO_CSS.to_string()],
+            document_scroll: false,
         },
         HELLO_COMPONENT,
     );

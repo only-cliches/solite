@@ -211,29 +211,24 @@ pub fn present_to_surface(
     blit: &BlitContext,
     draws: &[BlitDraw],
 ) -> bool {
-    let mut reconfigured = false;
-
     let frame = match surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(frame) => frame,
         wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
         wgpu::CurrentSurfaceTexture::Timeout => return true,
-        wgpu::CurrentSurfaceTexture::Occluded => return false,
+        // Newly-created windows can briefly report occlusion before the
+        // compositor starts presenting them. Ask the host to try again.
+        wgpu::CurrentSurfaceTexture::Occluded => return true,
         wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-            if !reconfigured {
-                reconfigured = true;
-                surface.configure(device, config);
-                match surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(frame) => frame,
-                    wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-                    wgpu::CurrentSurfaceTexture::Timeout => return true,
-                    wgpu::CurrentSurfaceTexture::Occluded => return false,
-                    wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                        return false;
-                    }
-                    wgpu::CurrentSurfaceTexture::Validation => return false,
+            surface.configure(device, config);
+            match surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+                wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+                wgpu::CurrentSurfaceTexture::Timeout => return true,
+                wgpu::CurrentSurfaceTexture::Occluded => return true,
+                wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                    return true;
                 }
-            } else {
-                return false;
+                wgpu::CurrentSurfaceTexture::Validation => return false,
             }
         }
         wgpu::CurrentSurfaceTexture::Validation => return false,

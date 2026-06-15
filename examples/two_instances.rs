@@ -95,6 +95,7 @@ impl ApplicationHandler for TwoApp {
                 device: gpu.device.clone(),
                 queue: gpu.queue.clone(),
                 stylesheets: vec![SHARED_CSS.to_string()],
+                document_scroll: false,
             },
             COMP_A,
         );
@@ -105,6 +106,7 @@ impl ApplicationHandler for TwoApp {
                 device: gpu.device.clone(),
                 queue: gpu.queue.clone(),
                 stylesheets: vec![SHARED_CSS.to_string()],
+                document_scroll: false,
             },
             COMP_B,
         );

@@ -272,3 +272,156 @@ fn combine_tick_result(a: TickResult, b: TickResult) -> TickResult {
         jobs_pending: a.jobs_pending || b.jobs_pending,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{InstanceConfig, StateHandle};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    const TWO_INPUT_COMPONENT: &str = r#"
+        import { render } from "oxide-runtime";
+        function App() {
+          const root = __ox_createElement("div");
+
+          const first = __ox_createElement("input");
+          __ox_setProperty(first, "style", "display:block; width:90px; height:24px;");
+          __ox_setProperty(first, "onFocus", () => {
+            globalThis.state.focused = "first";
+          });
+
+          const second = __ox_createElement("input");
+          __ox_setProperty(second, "style", "display:block; width:90px; height:24px;");
+          __ox_setProperty(second, "onFocus", () => {
+            globalThis.state.focused = "second";
+          });
+
+          __ox_insertNode(root, first, null);
+          __ox_insertNode(root, second, null);
+          return root;
+        }
+        render(() => App(), __OX_ROOT__);
+    "#;
+
+    async fn make_test_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+        if cfg!(target_os = "linux") {
+            if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
+                std::env::set_var("XDG_RUNTIME_DIR", "/tmp");
+            }
+        }
+
+        let wgpu_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = wgpu_instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .expect("no adapter available for test");
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("oxide-scene-test"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+            })
+            .await
+            .expect("request device");
+
+        (Arc::new(device), Arc::new(queue))
+    }
+
+    fn test_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+        pollster::block_on(make_test_device())
+    }
+
+    fn tab_key() -> KeyboardEvent {
+        KeyboardEvent {
+            key: "Tab".into(),
+            code: "Tab".into(),
+            key_code: 9,
+            repeat: false,
+            shift_key: false,
+            ctrl_key: false,
+            alt_key: false,
+            meta_key: false,
+        }
+    }
+
+    fn make_input_instance(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+    ) -> (Instance, StateHandle) {
+        let (mut instance, _rx) = Instance::new(
+            InstanceConfig {
+                width: 100,
+                height: 80,
+                device,
+                queue,
+                stylesheets: vec![],
+                document_scroll: false,
+            },
+            TWO_INPUT_COMPONENT,
+        );
+        let _ = instance.render();
+        let state = instance.state();
+        (instance, state)
+    }
+
+    #[test]
+    fn tab_only_moves_focus_within_last_clicked_surface() {
+        let (device, queue) = test_device();
+        let (instance_a, state_a) = make_input_instance(device.clone(), queue.clone());
+        let (instance_b, state_b) = make_input_instance(device, queue);
+
+        let mut scene = Scene::new();
+        let surface_a = scene.add_surface(instance_a, SurfaceRect::new(0.0, 0.0, 100.0, 80.0), ());
+        let surface_b =
+            scene.add_surface(instance_b, SurfaceRect::new(150.0, 0.0, 100.0, 80.0), ());
+
+        let _ = scene.dispatch_mouse(
+            160.0,
+            10.0,
+            MouseEvent::Down {
+                x: 160.0,
+                y: 10.0,
+                button: MouseButton::Left,
+            },
+        );
+
+        assert_eq!(scene.focused_surface(), Some(surface_b));
+        assert_eq!(state_a.get("focused"), None);
+        assert_eq!(state_b.get("focused"), Some(json!("first")));
+
+        let _ = scene.dispatch_key_down(tab_key());
+
+        assert_eq!(scene.focused_surface(), Some(surface_b));
+        assert_eq!(state_a.get("focused"), None);
+        assert_eq!(state_b.get("focused"), Some(json!("second")));
+
+        let _ = scene.dispatch_mouse(
+            10.0,
+            10.0,
+            MouseEvent::Down {
+                x: 10.0,
+                y: 10.0,
+                button: MouseButton::Left,
+            },
+        );
+
+        assert_eq!(scene.focused_surface(), Some(surface_a));
+        assert_eq!(state_a.get("focused"), Some(json!("first")));
+
+        let _ = scene.dispatch_key_down(tab_key());
+
+        assert_eq!(state_a.get("focused"), Some(json!("second")));
+        assert_eq!(state_b.get("focused"), Some(json!("second")));
+    }
+}

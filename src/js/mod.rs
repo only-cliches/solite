@@ -43,6 +43,10 @@ pub(crate) struct JsContext {
     /// (`value`, `placeholder`, `type`, `readonly`) can update the input,
     /// and accessed by the [`Instance`] when dispatching key events.
     pub(crate) inputs: crate::input::InputRegistry,
+    /// Native-select state. Cloned into the bridge so attribute writes
+    /// and option mutations can update the select, and accessed by the
+    /// [`Instance`] when dispatching key events.
+    pub(crate) selects: crate::select::SelectRegistry,
 }
 
 impl Drop for JsContext {
@@ -90,12 +94,14 @@ impl JsContext {
         let context = Context::full(&runtime).expect("rquickjs context");
         let handlers = Rc::new(RefCell::new(HandlerMap::new()));
         let inputs = crate::input::new_registry();
+        let selects = crate::select::new_registry();
         Self {
             runtime,
             context,
             doc,
             handlers,
             inputs,
+            selects,
         }
     }
 
@@ -121,6 +127,7 @@ impl JsContext {
             Rc::clone(&self.doc),
             Rc::clone(&self.handlers),
             Rc::clone(&self.inputs),
+            Rc::clone(&self.selects),
         );
 
         self.context.with(|ctx| {
@@ -387,7 +394,9 @@ impl JsContext {
         &self,
         node_id: usize,
         value: &str,
-        caret: usize,
+        checked: bool,
+        selection_start: usize,
+        selection_end: usize,
     ) -> TickResult {
         let Some(id) = self.find_handler_up(&self.doc.borrow(), node_id, "input") else {
             return TickResult::default();
@@ -402,7 +411,50 @@ impl JsContext {
         };
         self.context.with(|ctx| {
             if let Ok(func) = p.restore(&ctx) {
-                if let Ok(ev) = make_input_event(&ctx, node_id, id, value, caret) {
+                if let Ok(ev) = make_input_event(
+                    &ctx,
+                    node_id,
+                    id,
+                    value,
+                    checked,
+                    selection_start,
+                    selection_end,
+                ) {
+                    let _ = func.call::<(rquickjs::Value,), ()>((ev.into_value(),));
+                }
+            }
+            for _ in 0..DEFAULT_JOB_BUDGET {
+                if !ctx.execute_pending_job() {
+                    break;
+                }
+            }
+        });
+        TickResult {
+            needs_paint: true,
+            jobs_pending: self.runtime.is_job_pending(),
+        }
+    }
+
+    pub(crate) fn dispatch_select_change_event(
+        &self,
+        node_id: usize,
+        value: &str,
+        selected_index: Option<usize>,
+    ) -> TickResult {
+        let Some(id) = self.find_handler_up(&self.doc.borrow(), node_id, "change") else {
+            return TickResult::default();
+        };
+        let persistent = self
+            .handlers
+            .borrow()
+            .get(&(id, "change".to_string()))
+            .cloned();
+        let Some(p) = persistent else {
+            return TickResult::default();
+        };
+        self.context.with(|ctx| {
+            if let Ok(func) = p.restore(&ctx) {
+                if let Ok(ev) = make_select_change_event(&ctx, node_id, id, value, selected_index) {
                     let _ = func.call::<(rquickjs::Value,), ()>((ev.into_value(),));
                 }
             }
@@ -569,8 +621,9 @@ fn enrich_with_input<'js>(
         return Ok(());
     };
     obj.set("value", state.value())?;
-    obj.set("selectionStart", state.caret())?;
-    obj.set("selectionEnd", state.caret())?;
+    obj.set("checked", state.checked())?;
+    obj.set("selectionStart", state.selection_start())?;
+    obj.set("selectionEnd", state.selection_end())?;
     Ok(())
 }
 
@@ -581,7 +634,9 @@ fn make_input_event<'js>(
     target_node_id: usize,
     current_target_node_id: usize,
     value: &str,
-    caret: usize,
+    checked: bool,
+    selection_start: usize,
+    selection_end: usize,
 ) -> rquickjs::Result<Object<'js>> {
     let obj = Object::new(ctx.clone())?;
     obj.set("type", "input")?;
@@ -589,8 +644,26 @@ fn make_input_event<'js>(
     obj.set("currentTarget", current_target_node_id)?;
     obj.set("relatedTarget", Value::new_null(ctx.clone()))?;
     obj.set("value", value)?;
-    obj.set("selectionStart", caret)?;
-    obj.set("selectionEnd", caret)?;
+    obj.set("checked", checked)?;
+    obj.set("selectionStart", selection_start)?;
+    obj.set("selectionEnd", selection_end)?;
+    Ok(obj)
+}
+
+fn make_select_change_event<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    target_node_id: usize,
+    current_target_node_id: usize,
+    value: &str,
+    selected_index: Option<usize>,
+) -> rquickjs::Result<Object<'js>> {
+    let obj = Object::new(ctx.clone())?;
+    obj.set("type", "change")?;
+    obj.set("target", target_node_id)?;
+    obj.set("currentTarget", current_target_node_id)?;
+    obj.set("relatedTarget", Value::new_null(ctx.clone()))?;
+    obj.set("value", value)?;
+    obj.set("selectedIndex", selected_index.unwrap_or(0))?;
     Ok(obj)
 }
 

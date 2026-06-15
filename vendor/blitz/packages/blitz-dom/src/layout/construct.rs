@@ -644,7 +644,15 @@ fn create_checkbox_input(doc: &mut BaseDocument, input_element_id: usize) {
 
     let element = &mut node.data.downcast_element_mut().unwrap();
     if !matches!(element.special_data, SpecialElementData::CheckboxInput(_)) {
-        let checked = element.has_attr(local_name!("checked"));
+        // Parse the attribute value: absent → false; "false"/"0"/"off" → false;
+        // any other value (including "") → true (standard HTML boolean attribute).
+        let checked = match element.attr(local_name!("checked")) {
+            None => false,
+            Some(v) => {
+                let v = v.trim().to_ascii_lowercase();
+                !matches!(v.as_str(), "false" | "0" | "off")
+            }
+        };
         element.special_data = SpecialElementData::CheckboxInput(checked);
     }
 }

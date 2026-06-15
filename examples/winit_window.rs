@@ -80,6 +80,7 @@ impl ApplicationHandler for App {
                 device: gpu.device.clone(),
                 queue: gpu.queue.clone(),
                 stylesheets: vec![HELLO_CSS.to_string()],
+                document_scroll: false,
             },
             HELLO_COMPONENT,
         );
