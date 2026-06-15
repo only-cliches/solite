@@ -1388,21 +1388,57 @@ impl Instance {
                 continue;
             }
 
-            if let Some(node) = doc.get_node(*select_id) {
-                let abs = node.absolute_position(0.0, 0.0);
-                let l = &node.final_layout;
+            if let Some(select_node) = doc.get_node(*select_id) {
+                let abs = select_node.absolute_position(0.0, 0.0);
+                let l = &select_node.final_layout;
                 let x = abs.x;
                 let y = abs.y + l.size.height;
                 let width = l.size.width;
 
-                let options: Vec<crate::select::PopupOption> = state
-                    .options
-                    .iter()
-                    .map(|opt| crate::select::PopupOption {
-                        label: opt.label.clone(),
-                        disabled: opt.disabled,
-                    })
-                    .collect();
+                // Collect option labels from DOM nodes
+                let mut options = Vec::new();
+                for (i, opt_state) in state.options.iter().enumerate() {
+                    // Try to find the actual option element's text content
+                    let mut label = opt_state.label.clone();
+
+                    // Walk through select's children to find option elements
+                    for child_id in select_node.children.iter() {
+                        if let Some(child) = doc.get_node(*child_id) {
+                            if let Some(elem) = child.element_data() {
+                                if elem.name.local.as_ref() == "option" {
+                                    // Check if this is the i-th option
+                                    let mut current_index = 0;
+                                    for potential_id in select_node.children.iter() {
+                                        if let Some(p) = doc.get_node(*potential_id) {
+                                            if let Some(e) = p.element_data() {
+                                                if e.name.local.as_ref() == "option" {
+                                                    if current_index == i {
+                                                        // Found the right option, get its text
+                                                        if let Some(first_child) = p.children.first() {
+                                                            if let Some(text_node) = doc.get_node(*first_child) {
+                                                                if let Some(text) = text_node.text_data() {
+                                                                    label = text.content.clone();
+                                                                }
+                                                            }
+                                                        }
+                                                        break;
+                                                    }
+                                                    current_index += 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    options.push(crate::select::PopupOption {
+                        label,
+                        disabled: opt_state.disabled,
+                    });
+                }
 
                 popups.push(crate::select::SelectPopupGeometry {
                     select_id: *select_id,
