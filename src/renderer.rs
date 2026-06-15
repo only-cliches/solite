@@ -250,36 +250,49 @@ fn paint_select_popups<S: PaintScene>(
                 &option_rect,
             );
 
-            // Render option label indicator
-            // The actual label text from PopupOption is available but full text rendering
-            // through vello/peniko requires glyph support. For MVP, we render a simple indicator.
+            // Draw option number indicator on the left
+            let number_x = popup.x + 4.0;
+            let number_y = y + option_height / 2.0 - 6.0;
+            let number_size = 12.0;
+            let number_rect = Rect::new(
+                number_x as f64,
+                number_y as f64,
+                (number_x + number_size) as f64,
+                (number_y + number_size) as f64,
+            );
 
-            // Show the option index as a circle with number
-            let idx_text = (i + 1).to_string();
-            let indicator_size = 16.0;
-            let indicator_x = popup.x + 6.0;
-            let indicator_y = y + (option_height - indicator_size) / 2.0;
-
-            let indicator_color = if option.disabled {
-                peniko::Color::from_rgba8(180, 180, 180, 255)
-            } else {
-                peniko::Color::from_rgba8(70, 130, 180, 255)
-            };
-
-            // Draw circle with background color
-            let circle = kurbo::Circle::new((indicator_x + indicator_size / 2.0, indicator_y + indicator_size / 2.0), (indicator_size / 2.0) as f64);
+            let number_color = peniko::Color::from_rgba8(100, 100, 100, 200);
             scene.fill(
                 Fill::NonZero,
                 Affine::scale(scale),
-                indicator_color,
+                number_color,
                 None,
-                &circle,
+                &number_rect,
             );
 
-            // TODO: Full text rendering - requires integrating blitz-paint's text system
-            // The option.label contains the actual text that should be displayed
-            // but rendering it requires access to font metrics and glyph rendering.
-            let _ = (option, idx_text);
+            // Draw disabled indicator if needed
+            if option.disabled {
+                let disable_line_y = y + option_height / 2.0;
+                let disable_line = Rect::new(
+                    (popup.x + 2.0) as f64,
+                    (disable_line_y - 0.5) as f64,
+                    (popup.x + popup.width - 2.0) as f64,
+                    (disable_line_y + 0.5) as f64,
+                );
+                let disable_color = peniko::Color::from_rgba8(200, 100, 100, 150);
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::scale(scale),
+                    disable_color,
+                    None,
+                    &disable_line,
+                );
+            }
+
+            // TODO: Render actual option label text using blitz-paint's text system
+            // The option.label string should be rendered as glyphs starting at (popup.x + 20.0, y + 4.0)
+            // This requires font metrics and glyph rendering integration.
+            let _ = option;
         }
     }
 }

@@ -1391,8 +1391,24 @@ impl Instance {
             if let Some(select_node) = doc.get_node(*select_id) {
                 let abs = select_node.absolute_position(0.0, 0.0);
                 let l = &select_node.final_layout;
-                let x = abs.x;
-                let y = abs.y + l.size.height;
+
+                // Calculate scroll offset from ancestors
+                let mut scroll_x = 0.0f32;
+                let mut scroll_y = 0.0f32;
+                let mut current_id = select_node.parent;
+
+                while let Some(parent_id) = current_id {
+                    if let Some(parent) = doc.get_node(parent_id) {
+                        scroll_x -= parent.scroll_offset.x as f32;
+                        scroll_y -= parent.scroll_offset.y as f32;
+                        current_id = parent.parent;
+                    } else {
+                        break;
+                    }
+                }
+
+                let x = abs.x + scroll_x;
+                let y = abs.y + l.size.height + scroll_y;
                 let width = l.size.width;
 
                 // Collect option labels from DOM nodes
