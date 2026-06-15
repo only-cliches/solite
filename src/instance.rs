@@ -529,9 +529,59 @@ impl Instance {
 
     fn hit_node_id(&self, x: f32, y: f32) -> Option<usize> {
         let (document_x, document_y) = self.document_coords_for_client(x, y);
+        // Open popups are absolutely-positioned children of their <select> and
+        // extend below it; the regular tree hit-test (`hit_visible_node_id`)
+        // bails when the click is outside the select's bounding box and never
+        // descends into the popup. Check popups first using their absolute
+        // positions so option clicks land on the popup nodes.
+        if let Some(id) = self.hit_popup_node(document_x, document_y) {
+            return Some(id);
+        }
         let doc = self.doc.borrow();
         let root_id = doc.root_element().id;
         hit_visible_node_id(&doc, root_id, document_x, document_y)
+    }
+
+    /// Look for a hit against any open `<select>` popup overlay, using each
+    /// popup option's resolved absolute position. Returns the deepest matching
+    /// option node id, falling back to the popup root if the point is inside
+    /// the popup background but not over any option.
+    fn hit_popup_node(&self, document_x: f32, document_y: f32) -> Option<usize> {
+        let doc = self.doc.borrow();
+        let selects = self.js.selects.borrow();
+        for (_, state) in selects.iter() {
+            let Some(popup_id) = state.popup_root_id else {
+                continue;
+            };
+            let Some(popup_node) = doc.get_node(popup_id) else {
+                continue;
+            };
+            let abs = popup_node.absolute_position(0.0, 0.0);
+            let size = popup_node.final_layout.size;
+            if document_x < abs.x
+                || document_x > abs.x + size.width
+                || document_y < abs.y
+                || document_y > abs.y + size.height
+            {
+                continue;
+            }
+            for &opt_id in &state.option_node_ids {
+                let Some(opt_node) = doc.get_node(opt_id) else {
+                    continue;
+                };
+                let opt_abs = opt_node.absolute_position(0.0, 0.0);
+                let opt_size = opt_node.final_layout.size;
+                if document_x >= opt_abs.x
+                    && document_x <= opt_abs.x + opt_size.width
+                    && document_y >= opt_abs.y
+                    && document_y <= opt_abs.y + opt_size.height
+                {
+                    return Some(opt_id);
+                }
+            }
+            return Some(popup_id);
+        }
+        None
     }
 
     /// Read the current vertical scroll offset of a node.

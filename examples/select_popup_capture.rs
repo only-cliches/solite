@@ -10,12 +10,16 @@ mod capture;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use oxide_dom::{Instance, InstanceConfig};
+use oxide_dom::{Instance, InstanceConfig, MouseButton, MouseEvent};
 
-// Hand-built via bridge primitives so we don't pay the JSX compile cost
-// for a single-shot verification.
+// Hand-built via bridge primitives. We mirror what the kitchen_sink JSX
+// produces for `<select value={state.x} onChange={...}>`: an onChange
+// handler that writes state (triggering a reactive value re-set on the
+// select itself) so we can exercise the same path that panics under winit.
 const COMPONENT: &str = r#"
-function build() {
+import { createEffect, render } from "oxide-runtime";
+
+function App() {
   const panel = __ox_createElement("div");
   __ox_setProperty(panel, "className", "panel");
 
@@ -26,6 +30,9 @@ function build() {
 
   const sel = __ox_createElement("select");
   __ox_setProperty(sel, "className", "sel");
+  __ox_setProperty(sel, "onChange", (event) => {
+    globalThis.state.selectValue = event.value;
+  });
 
   function mkOpt(value, text, disabled) {
     const opt = __ox_createElement("option");
@@ -41,11 +48,15 @@ function build() {
   __ox_insertNode(sel, mkOpt("d", "Date (disabled)", true), null);
   __ox_insertNode(sel, mkOpt("e", "Elderberry", false), null);
 
+  // Reactive `value` mirroring globalThis.state.selectValue, matching what
+  // the JSX compiler emits for `value={globalThis.state.selectValue || ...}`.
+  createEffect(() => __ox_setProperty(sel, "value", globalThis.state.selectValue || "a"));
+
   __ox_insertNode(panel, sel, null);
   return panel;
 }
 
-__ox_insertNode(__OX_ROOT__, build(), null);
+render(() => App(), __OX_ROOT__);
 "#;
 
 const CSS: &str = r#"
@@ -123,13 +134,27 @@ fn main() {
     let _ = instance.tick();
     let _ = instance.render();
 
-    let select_ids = instance.select_node_ids();
-    if let Some(&id) = select_ids.first() {
-        instance.set_select_dropdown_open(id, true);
-    } else {
-        eprintln!("no <select> was registered");
-    }
+    let select_id = instance.select_node_ids().first().copied().expect("no <select> registered");
 
+    // Open the select by clicking it (mirrors what handle_select_click does
+    // via real pointer input). One frame of tick+render lays out the popup.
+    let (sx, sy) = (50.0, 60.0);
+    let _ = instance.dispatch_mouse(sx, sy, MouseEvent::Move { x: sx, y: sy });
+    let _ = instance.dispatch_mouse(sx, sy, MouseEvent::Down { x: sx, y: sy, button: MouseButton::Left });
+    let _ = instance.dispatch_mouse(sx, sy, MouseEvent::Up { x: sx, y: sy, button: MouseButton::Left });
+    let _ = instance.tick();
+    let _ = instance.render();
+    let _ = select_id;
+
+    // Hover and click the Banana option. This exercises the commit-and-close
+    // path that previously left no popup hit because the popup overflows the
+    // <select>'s box (the tree hit-test bails on out-of-bounds parents).
+    let (x, y) = (100.0, 120.0);
+    let _ = instance.dispatch_mouse(x, y, MouseEvent::Move { x, y });
+    let _ = instance.tick();
+    let _ = instance.render();
+    let _ = instance.dispatch_mouse(x, y, MouseEvent::Down { x, y, button: MouseButton::Left });
+    let _ = instance.dispatch_mouse(x, y, MouseEvent::Up { x, y, button: MouseButton::Left });
     let _ = instance.tick();
     let _ = instance.render();
 
