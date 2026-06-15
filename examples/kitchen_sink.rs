@@ -275,8 +275,8 @@ const APP_CSS: &str = r#"
 .field {
     display: block;
     width: 336px;
-    min-height: 36px;
-    padding: 8px;
+    min-height: 1em;
+    padding: 4px;
     margin-bottom: 10px;
     font-size: 17px;
     font-family: monospace;
@@ -322,15 +322,25 @@ const APP_CSS: &str = r#"
     cursor: pointer;
 }
 
-/* Checkbox and radio: fixed square, accent colour drives the painted widget. */
+/* Checkbox and radio: fixed square, accent colour drives the painted widget.
+   box-sizing keeps the rendered border-box at the declared size — without it
+   `padding` adds 6px to each axis and the radios become 28x28 rounded
+   rectangles instead of 22x22 squares. */
 .field-checkbox,
 .field-radio {
+    box-sizing: border-box;
     width: 22px;
     height: 22px;
     min-height: 22px;
     padding: 3px;
     color: #5b8cfa;
     cursor: pointer;
+}
+/* UA stylesheet sets a fixed 14px border-radius for radios, which is enough
+   for the 14px UA size but reads as a pill once we resize the box. Half the
+   box (11px) collapses the corners into a circle. */
+.field-radio {
+    border-radius: 11px;
 }
 
 /* Scrollable row list — alternating stripes + per-row :hover. */
