@@ -87,15 +87,21 @@ fn rebuild_select_state_from_dom(
                         .find(|a| a.name.local.as_ref() == "value")
                         .map(|a| a.value.to_string())
                         .unwrap_or_else(|| {
-                            // Fallback to text content if no value attribute
+                            // Fallback to the option's text-node child if no value attribute.
                             doc.get_node(child_id)
+                                .and_then(|n| n.children.first().copied())
+                                .and_then(|grandchild_id| doc.get_node(grandchild_id))
                                 .and_then(|n| n.text_data())
                                 .map(|t| t.content.clone())
                                 .unwrap_or_default()
                         });
 
+                    // Option text lives in the first text-node child, not on the
+                    // element itself.
                     let label = doc
                         .get_node(child_id)
+                        .and_then(|n| n.children.first().copied())
+                        .and_then(|grandchild_id| doc.get_node(grandchild_id))
                         .and_then(|n| n.text_data())
                         .map(|t| t.content.clone())
                         .unwrap_or_else(|| value.clone());
@@ -134,6 +140,16 @@ fn rebuild_select_state_from_dom(
     } else {
         None
     }
+}
+
+/// Write `display_text` into the synthetic text node that sits as the first
+/// child of `select_id`. Uses `set_node_text` so blitz marks the subtree dirty
+/// and the next layout/style pass picks up the new content.
+fn sync_select_display_text(doc: &mut BaseDocument, select_id: usize, display_text: &str) {
+    let Some(display_node_id) = doc.get_node(select_id).and_then(|n| n.children.first().copied()) else {
+        return;
+    };
+    doc.mutate().set_node_text(display_node_id, display_text);
 }
 
 
@@ -271,8 +287,21 @@ impl DomBridge {
                             .set_attribute(node_id, attr_qual(&key), &value);
                         match key.as_str() {
                             "value" => {
-                                if let Some(state) = inputs.borrow_mut().get_mut(&node_id) {
-                                    state.set_value(value);
+                                let handled_input = inputs
+                                    .borrow_mut()
+                                    .get_mut(&node_id)
+                                    .map(|state| state.set_value(value))
+                                    .is_some();
+                                if !handled_input {
+                                    let parent_select_id = find_parent_select(&doc.borrow(), node_id);
+                                    if let Some(parent_select_id) = parent_select_id {
+                                        let borrow = doc.borrow();
+                                        let display_text = rebuild_select_state_from_dom(&borrow, &mut selects.borrow_mut(), parent_select_id);
+                                        drop(borrow);
+                                        if let Some(display_text) = display_text {
+                                            sync_select_display_text(&mut doc.borrow_mut(), parent_select_id, &display_text);
+                                        }
+                                    }
                                 }
                             }
                             "placeholder" => {
@@ -376,18 +405,10 @@ impl DomBridge {
                                     match key.as_str() {
                                         "value" | "selected" => {
                                             let borrow = doc.borrow();
-                                            if let Some(display_text) = rebuild_select_state_from_dom(&borrow, &mut selects.borrow_mut(), parent_select_id) {
-                                                drop(borrow);
-                                                let mut doc_mut = doc.borrow_mut();
-                                                if let Some(select_node) = doc_mut.get_node(parent_select_id) {
-                                                    if let Some(&display_node_id) = select_node.children.first() {
-                                                        if let Some(display_node) = doc_mut.get_node_mut(display_node_id) {
-                                                            if let Some(text_data) = display_node.text_data_mut() {
-                                                                text_data.content = display_text;
-                                                            }
-                                                        }
-                                                    }
-                                                }
+                                            let display_text = rebuild_select_state_from_dom(&borrow, &mut selects.borrow_mut(), parent_select_id);
+                                            drop(borrow);
+                                            if let Some(display_text) = display_text {
+                                                sync_select_display_text(&mut doc.borrow_mut(), parent_select_id, &display_text);
                                             }
                                         }
                                         _ => {}
@@ -593,24 +614,25 @@ impl DomBridge {
                             borrow.upsert_stylesheet_for_node(style_id);
                         }
 
-                        // If parent is a select, rebuild its options
-                        if borrow
-                            .get_node(parent)
-                            .and_then(|n| n.element_data())
-                            .is_some_and(|e| e.name.local.as_ref() == "select")
-                        {
-                            if let Some(display_text) = rebuild_select_state_from_dom(&borrow, &mut selects.borrow_mut(), parent) {
-                                drop(borrow);
-                                let mut borrow = doc.borrow_mut();
-                                if let Some(select_node) = borrow.get_node(parent) {
-                                    if let Some(&display_node_id) = select_node.children.first() {
-                                        if let Some(display_node) = borrow.get_node_mut(display_node_id) {
-                                            if let Some(text_data) = display_node.text_data_mut() {
-                                                text_data.content = display_text;
-                                            }
-                                        }
-                                    }
-                                }
+                        // If parent is a select directly, or an option inside a
+                        // select (so the inserted node contributes to an option's
+                        // label/value), rebuild the select.
+                        let select_to_rebuild = {
+                            let parent_node = borrow.get_node(parent);
+                            let tag = parent_node
+                                .and_then(|n| n.element_data())
+                                .map(|e| e.name.local.as_ref().to_owned());
+                            match tag.as_deref() {
+                                Some("select") => Some(parent),
+                                Some("option") => find_parent_select(&borrow, parent),
+                                _ => None,
+                            }
+                        };
+                        if let Some(select_id) = select_to_rebuild {
+                            let display_text = rebuild_select_state_from_dom(&borrow, &mut selects.borrow_mut(), select_id);
+                            drop(borrow);
+                            if let Some(display_text) = display_text {
+                                sync_select_display_text(&mut doc.borrow_mut(), select_id, &display_text);
                             }
                         }
 
@@ -642,18 +664,10 @@ impl DomBridge {
                         // Rebuild select state if this was an option
                         if let Some(select_id) = parent_select {
                             let borrow = doc.borrow();
-                            if let Some(display_text) = rebuild_select_state_from_dom(&borrow, &mut selects.borrow_mut(), select_id) {
-                                drop(borrow);
-                                let mut borrow = doc.borrow_mut();
-                                if let Some(select_node) = borrow.get_node(select_id) {
-                                    if let Some(&display_node_id) = select_node.children.first() {
-                                        if let Some(display_node) = borrow.get_node_mut(display_node_id) {
-                                            if let Some(text_data) = display_node.text_data_mut() {
-                                                text_data.content = display_text;
-                                            }
-                                        }
-                                    }
-                                }
+                            let display_text = rebuild_select_state_from_dom(&borrow, &mut selects.borrow_mut(), select_id);
+                            drop(borrow);
+                            if let Some(display_text) = display_text {
+                                sync_select_display_text(&mut doc.borrow_mut(), select_id, &display_text);
                             }
                         }
 
@@ -702,18 +716,10 @@ impl DomBridge {
 
                         if let Some(select_id) = parent_select {
                             let borrow = doc.borrow();
-                            if let Some(display_text) = rebuild_select_state_from_dom(&borrow, &mut selects.borrow_mut(), select_id) {
-                                drop(borrow);
-                                let mut borrow = doc.borrow_mut();
-                                if let Some(select_node) = borrow.get_node(select_id) {
-                                    if let Some(&display_node_id) = select_node.children.first() {
-                                        if let Some(display_node) = borrow.get_node_mut(display_node_id) {
-                                            if let Some(text_data) = display_node.text_data_mut() {
-                                                text_data.content = display_text;
-                                            }
-                                        }
-                                    }
-                                }
+                            let display_text = rebuild_select_state_from_dom(&borrow, &mut selects.borrow_mut(), select_id);
+                            drop(borrow);
+                            if let Some(display_text) = display_text {
+                                sync_select_display_text(&mut doc.borrow_mut(), select_id, &display_text);
                             }
                         }
 
