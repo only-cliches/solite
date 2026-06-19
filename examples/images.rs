@@ -16,6 +16,8 @@ use solite::{
     capture::capture_texture_to_png,
     gpu::{BlitContext, BlitDraw, present_to_surface},
 };
+#[cfg(feature = "jsx-compiler")]
+use solite::compile_component_source;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -162,7 +164,8 @@ impl ApplicationHandler for AppState {
             blue = self.blue_url,
             broken = self.broken_url,
         );
-        let component = format!("{preamble}\n{COMPONENT}");
+        let component_source = format!("{preamble}\n{COMPONENT}");
+        let component = compile_image_component_source(&component_source);
 
         let (instance, events) = Instance::new(
             InstanceConfig {
@@ -290,7 +293,19 @@ impl ApplicationHandler for AppState {
                     }
                 }
             }
-            _ => {}
+            other => {
+                if let Some(instance) = self.instance.as_mut() {
+                    let bridge_result = self.bridge.handle(instance, &other);
+                    if bridge_result.needs_redraw || bridge_result.jobs_pending {
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    if bridge_result.close_requested {
+                        event_loop.exit();
+                    }
+                }
+            }
         }
     }
 }
@@ -363,6 +378,7 @@ fn main() {
     let mut app = AppState {
         window: None,
         instance: None,
+        bridge: solite::winit::WinitBridge::new(),
         events: None,
         gpu: None,
         capture_path: args::capture_path_from_cli(),
@@ -373,4 +389,15 @@ fn main() {
         broken_url: url_for(&broken),
     };
     event_loop.run_app(&mut app).expect("run");
+}
+
+#[cfg(feature = "jsx-compiler")]
+fn compile_image_component_source(component_source: &str) -> String {
+    compile_component_source(std::path::Path::new("App.jsx"), component_source)
+        .expect("JSX compile failed")
+}
+
+#[cfg(not(feature = "jsx-compiler"))]
+fn compile_image_component_source(_component_source: &str) -> String {
+    panic!("images example requires the `jsx-compiler` feature");
 }
