@@ -1,11 +1,11 @@
 // Demonstrates `<img>` loading: static image, broken image with `onError`,
 // and a dynamic `src` swap driven by a JS button.
 //
-// Test PNGs are synthesised on the fly via the `image` crate (a dev-dep) and
-// written under `/tmp/solite-images/` so the example has no external
-// dependencies. Run with `cargo run --example images` to open a window.
+// Test PNGs are synthesised in memory via the `image` crate (a dev-dep) and
+// registered with `Instance::register_image_bytes` so they never touch the
+// filesystem. Run with `cargo run --example images` to open a window.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[path = "common/args.rs"]
@@ -24,10 +24,17 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
 // The component:
-//   - a "valid" img that loads from a file synthesised at startup
+//   - a "valid" img registered in memory via register_image_bytes
 //   - a "broken" img with onError that swaps a label to "load failed"
 //   - a "dynamic" img whose src is toggled by a button between red and blue
 //
+// Images use the `solite-image://` scheme so they're served from the
+// in-memory registry without touching the filesystem.
+const VALID_URL: &str = "solite-image://valid";
+const RED_URL: &str = "solite-image://red";
+const BLUE_URL: &str = "solite-image://blue";
+const BROKEN_URL: &str = "solite-image://broken"; // intentionally never registered
+
 const COMPONENT: &str = r#"
 import { render } from "solite-runtime";
 
@@ -88,33 +95,13 @@ const CSS: &str = r#"
 .swap { padding: 4px 10px; }
 "#;
 
-fn write_png(path: &Path, rgba: [u8; 4]) -> std::io::Result<()> {
+fn synth_png_bytes(rgba: [u8; 4]) -> Vec<u8> {
     use image::{ImageBuffer, Rgba};
     let img = ImageBuffer::from_fn(64, 64, |_, _| Rgba(rgba));
-    img.save(path).map_err(std::io::Error::other)
-}
-
-fn synth_test_images() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
-    let dir = PathBuf::from("/tmp/solite-images");
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let valid = dir.join("valid.png");
-    let red = dir.join("red.png");
-    let blue = dir.join("blue.png");
-    let broken = dir.join("does-not-exist.png");
-
-    write_png(&valid, [0x33, 0xaa, 0x33, 0xff]).expect("write valid png");
-    write_png(&red, [0xcc, 0x33, 0x33, 0xff]).expect("write red png");
-    write_png(&blue, [0x33, 0x66, 0xcc, 0xff]).expect("write blue png");
-    // Make sure broken doesn't exist.
-    let _ = std::fs::remove_file(&broken);
-
-    (valid, red, blue, broken)
-}
-
-fn url_for(path: &Path) -> String {
-    url::Url::from_file_path(path)
-        .map(|u| u.to_string())
-        .expect("absolute path")
+    let mut buf = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut buf, image::ImageFormat::Png)
+        .expect("encode PNG");
+    buf.into_inner()
 }
 
 struct AppState {
@@ -128,10 +115,9 @@ struct AppState {
     gpu: Option<Gpu>,
     capture_path: Option<PathBuf>,
     capture_done: bool,
-    valid_url: String,
-    red_url: String,
-    blue_url: String,
-    broken_url: String,
+    valid_png: Vec<u8>,
+    red_png: Vec<u8>,
+    blue_png: Vec<u8>,
 }
 
 struct Gpu {
@@ -151,18 +137,12 @@ impl ApplicationHandler for AppState {
 
         let gpu = pollster::block_on(init_gpu(window.clone()));
 
-        // Inject URL strings into the JS globals BEFORE the component evals.
-        // Since `Instance::new` mounts the component synchronously, we
-        // build a component source string with the URLs already baked in.
+        // Bake the URL constants into JS globals before the component evals.
         let preamble = format!(
-            "globalThis.__OX_VALID_URL = {valid:?};\n\
-             globalThis.__OX_RED_URL = {red:?};\n\
-             globalThis.__OX_BLUE_URL = {blue:?};\n\
-             globalThis.__OX_BROKEN_URL = {broken:?};\n",
-            valid = self.valid_url,
-            red = self.red_url,
-            blue = self.blue_url,
-            broken = self.broken_url,
+            "globalThis.__OX_VALID_URL = {VALID_URL:?};\n\
+             globalThis.__OX_RED_URL = {RED_URL:?};\n\
+             globalThis.__OX_BLUE_URL = {BLUE_URL:?};\n\
+             globalThis.__OX_BROKEN_URL = {BROKEN_URL:?};\n"
         );
         let component_source = format!("{preamble}\n{COMPONENT}");
         let component = compile_image_component_source(&component_source);
@@ -181,6 +161,12 @@ impl ApplicationHandler for AppState {
             &component,
         )
         .expect("create instance");
+
+        // Register in-memory PNGs. The broken URL is intentionally omitted so
+        // the img element triggers its onError handler.
+        instance.register_image_bytes(VALID_URL, self.valid_png.clone());
+        instance.register_image_bytes(RED_URL, self.red_png.clone());
+        instance.register_image_bytes(BLUE_URL, self.blue_png.clone());
 
         self.window = Some(window.clone());
         self.gpu = Some(gpu);
@@ -373,7 +359,6 @@ async fn init_gpu(window: Arc<Window>) -> Gpu {
 }
 
 fn main() {
-    let (valid, red, blue, broken) = synth_test_images();
     let event_loop = EventLoop::new().expect("event loop");
     let mut app = AppState {
         window: None,
@@ -383,10 +368,9 @@ fn main() {
         gpu: None,
         capture_path: args::capture_path_from_cli(),
         capture_done: false,
-        valid_url: url_for(&valid),
-        red_url: url_for(&red),
-        blue_url: url_for(&blue),
-        broken_url: url_for(&broken),
+        valid_png: synth_png_bytes([0x33, 0xaa, 0x33, 0xff]),
+        red_png: synth_png_bytes([0xcc, 0x33, 0x33, 0xff]),
+        blue_png: synth_png_bytes([0x33, 0x66, 0xcc, 0xff]),
     };
     event_loop.run_app(&mut app).expect("run");
 }

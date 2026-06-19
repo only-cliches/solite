@@ -24,7 +24,8 @@ mod winit_integration;
 pub use events::{Event, KeyboardEvent, MouseButton, MouseEvent};
 pub use fonts::FontFormat;
 pub use instance::{
-    FileWatch, Instance, InstanceConfig, RegisterFontError, SourceChangeSummary, StylesheetId,
+    FileWatch, Instance, InstanceConfig, RegisterFontError, RegisterImageError,
+    SourceChangeSummary, StylesheetId,
 };
 pub use js::TickResult;
 pub use js::VirtualSourceFile;

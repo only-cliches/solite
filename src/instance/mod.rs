@@ -64,6 +64,13 @@ pub enum RegisterFontError {
     Io(std::io::Error),
 }
 
+/// Error returned by [`Instance::register_image_from_path`].
+#[derive(Debug)]
+pub enum RegisterImageError {
+    /// Reading the image file failed.
+    Io(std::io::Error),
+}
+
 #[derive(Debug)]
 pub enum InstanceError {
     JsContext(JsContextError),

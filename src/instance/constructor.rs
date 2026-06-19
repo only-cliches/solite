@@ -16,7 +16,8 @@ use crate::net::{self, SoliteNetProvider};
 use crate::renderer::Painter;
 
 use super::{
-    Event, FileWatch, Instance, InstanceConfig, InstanceError, RegisterFontError, StylesheetId,
+    Event, FileWatch, Instance, InstanceConfig, InstanceError, RegisterFontError,
+    RegisterImageError, StylesheetId,
 };
 #[cfg(feature = "jsx-compiler")]
 use solite_build as compiler;
@@ -670,6 +671,32 @@ impl Instance {
         let format = FontFormat::from_path(path).ok_or(RegisterFontError::UnknownFormat)?;
         let bytes = std::fs::read(path).map_err(RegisterFontError::Io)?;
         Ok(self.register_font_bytes(family, bytes, format))
+    }
+
+    /// Register raw image bytes under a URL the document's net provider will
+    /// serve synchronously.
+    ///
+    /// After calling this, any `<img src="…">` (or CSS `url(…)`) that
+    /// references `url` will be served from memory rather than hitting the
+    /// filesystem or network. Use any URL scheme that does not conflict with
+    /// `file://`, `data:`, `http://`, or `https://` — e.g.
+    /// `"solite-image://my-icon"`.
+    pub fn register_image_bytes(&self, url: impl Into<String>, bytes: Vec<u8>) {
+        self.net_provider.register(url, bytes);
+    }
+
+    /// Register an image from a file on disk under `url`.
+    ///
+    /// Reads the file once and hands the bytes to [`Self::register_image_bytes`].
+    /// After this call succeeds the file is no longer required at runtime.
+    pub fn register_image_from_path(
+        &self,
+        url: impl Into<String>,
+        path: &Path,
+    ) -> Result<(), RegisterImageError> {
+        let bytes = std::fs::read(path).map_err(RegisterImageError::Io)?;
+        self.register_image_bytes(url, bytes);
+        Ok(())
     }
 
     /// Start watching a component path and receive changed file paths.
