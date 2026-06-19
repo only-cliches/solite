@@ -95,7 +95,8 @@ impl ApplicationHandler for TwoApp {
                 document_scroll: false,
                 base_url: None,
                 initial_state: None,
-            registered_resources: vec![],
+                registered_resources: vec![],
+                scale_factor: window.scale_factor(),
             },
             &component_a,
         )
@@ -110,7 +111,8 @@ impl ApplicationHandler for TwoApp {
                 document_scroll: false,
                 base_url: None,
                 initial_state: None,
-            registered_resources: vec![],
+                registered_resources: vec![],
+                scale_factor: window.scale_factor(),
             },
             &component_b,
         )

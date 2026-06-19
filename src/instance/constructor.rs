@@ -51,6 +51,7 @@ impl Instance {
         let InstanceConfig {
             width,
             height,
+            scale_factor,
             device,
             queue,
             stylesheets: initial_stylesheets,
@@ -60,10 +61,13 @@ impl Instance {
             registered_resources,
         } = config;
 
+        let phys_w = ((width as f64) * scale_factor).round() as u32;
+        let phys_h = ((height as f64) * scale_factor).round() as u32;
+
         // --- Document ---
         let viewport = Viewport {
-            window_size: (width, height),
-            hidpi_scale: 1.0,
+            window_size: (phys_w, phys_h),
+            hidpi_scale: scale_factor as f32,
             zoom: 1.0,
             color_scheme: ColorScheme::Light,
         };
@@ -124,8 +128,8 @@ impl Instance {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("solite"),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: phys_w,
+                height: phys_h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -139,11 +143,12 @@ impl Instance {
         });
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let painter = Painter::new(Arc::clone(&device), Arc::clone(&queue), width, height);
+        let painter = Painter::new(Arc::clone(&device), Arc::clone(&queue), phys_w, phys_h);
 
         let instance = Self {
             width,
             height,
+            scale_factor,
             device,
             doc,
             js,
@@ -232,6 +237,7 @@ impl Instance {
         let InstanceConfig {
             width,
             height,
+            scale_factor,
             device,
             queue,
             stylesheets: initial_stylesheets,
@@ -241,10 +247,13 @@ impl Instance {
             registered_resources,
         } = config;
 
+        let phys_w = ((width as f64) * scale_factor).round() as u32;
+        let phys_h = ((height as f64) * scale_factor).round() as u32;
+
         // --- Document ---
         let viewport = Viewport {
-            window_size: (width, height),
-            hidpi_scale: 1.0,
+            window_size: (phys_w, phys_h),
+            hidpi_scale: scale_factor as f32,
             zoom: 1.0,
             color_scheme: ColorScheme::Light,
         };
@@ -319,8 +328,8 @@ impl Instance {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("solite"),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: phys_w,
+                height: phys_h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -334,11 +343,12 @@ impl Instance {
         });
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let painter = Painter::new(Arc::clone(&device), Arc::clone(&queue), width, height);
+        let painter = Painter::new(Arc::clone(&device), Arc::clone(&queue), phys_w, phys_h);
 
         let instance = Self {
             width,
             height,
+            scale_factor,
             device,
             doc,
             js,
@@ -455,6 +465,7 @@ impl Instance {
         let InstanceConfig {
             width,
             height,
+            scale_factor,
             device,
             queue,
             stylesheets: initial_stylesheets,
@@ -464,10 +475,13 @@ impl Instance {
             registered_resources,
         } = config;
 
+        let phys_w = ((width as f64) * scale_factor).round() as u32;
+        let phys_h = ((height as f64) * scale_factor).round() as u32;
+
         // --- Document ---
         let viewport = Viewport {
-            window_size: (width, height),
-            hidpi_scale: 1.0,
+            window_size: (phys_w, phys_h),
+            hidpi_scale: scale_factor as f32,
             zoom: 1.0,
             color_scheme: ColorScheme::Light,
         };
@@ -529,8 +543,8 @@ impl Instance {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("solite"),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: phys_w,
+                height: phys_h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -544,11 +558,12 @@ impl Instance {
         });
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let painter = Painter::new(Arc::clone(&device), Arc::clone(&queue), width, height);
+        let painter = Painter::new(Arc::clone(&device), Arc::clone(&queue), phys_w, phys_h);
 
         let instance = Self {
             width,
             height,
+            scale_factor,
             device,
             doc,
             js,

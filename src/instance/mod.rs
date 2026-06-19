@@ -21,8 +21,15 @@ use crate::state::StateHandle;
 
 /// Configuration passed to [`Instance::new`].
 pub struct InstanceConfig {
+    /// Width of the rendered surface in **logical (CSS) pixels**.
     pub width: u32,
+    /// Height of the rendered surface in **logical (CSS) pixels**.
     pub height: u32,
+    /// Device pixel ratio (HiDPI / Retina scale). The GPU texture is created
+    /// at `width * scale_factor` × `height * scale_factor` physical pixels so
+    /// the blit onto the OS surface is 1:1 and crisp on HiDPI displays. Pass
+    /// `window.scale_factor()` from winit. Defaults to `1.0` (non-HiDPI).
+    pub scale_factor: f64,
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
     /// Stylesheets registered before the first paint. Each entry is a CSS
@@ -178,6 +185,7 @@ impl std::error::Error for RegisterFontError {
 pub struct Instance {
     width: u32,
     height: u32,
+    scale_factor: f64,
     device: Arc<wgpu::Device>,
     doc: Rc<RefCell<BaseDocument>>,
     js: JsContext,

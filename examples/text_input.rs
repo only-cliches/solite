@@ -140,6 +140,7 @@ impl ApplicationHandler for App {
                     .as_ref()
                     .map(|_| json!({ "value": "hello world" })),
                 registered_resources: vec![],
+                scale_factor: 1.0,
             },
             &component,
         )

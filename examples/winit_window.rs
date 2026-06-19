@@ -77,6 +77,7 @@ impl ApplicationHandler for App {
                 base_url: None,
                 initial_state: None,
             registered_resources: vec![],
+                scale_factor: window.scale_factor(),
             },
             &component,
         )

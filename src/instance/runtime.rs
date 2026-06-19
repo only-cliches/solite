@@ -117,6 +117,7 @@ impl Instance {
                 &input_carets,
                 &self.spinners,
                 self.scrollbar_theme,
+                self.scale_factor,
                 &self.texture,
             );
             self.restore_blitz_text_input_focus_after_paint(&mut doc, masked_focus);
@@ -138,12 +139,15 @@ impl Instance {
         self.width = width;
         self.height = height;
 
-        // Reallocate texture.
+        let phys_w = ((width as f64) * self.scale_factor).round() as u32;
+        let phys_h = ((height as f64) * self.scale_factor).round() as u32;
+
+        // Reallocate texture at physical pixel dimensions.
         self.texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("solite"),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: phys_w,
+                height: phys_h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -161,8 +165,8 @@ impl Instance {
 
         // Update blitz viewport.
         let viewport = Viewport {
-            window_size: (width, height),
-            hidpi_scale: 1.0,
+            window_size: (phys_w, phys_h),
+            hidpi_scale: self.scale_factor as f32,
             zoom: 1.0,
             color_scheme: ColorScheme::Light,
         };
@@ -175,8 +179,8 @@ impl Instance {
             mutate.set_style_property(self.container_id, "overflow-y", "auto");
         }
 
-        // Update painter output buffers with new dimensions.
-        self.painter.resize(width, height);
+        // Update painter output buffers with new physical dimensions.
+        self.painter.resize(phys_w, phys_h);
         self.needs_paint = true;
     }
 

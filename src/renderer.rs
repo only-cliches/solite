@@ -67,21 +67,22 @@ impl Painter {
         input_carets: &[InputCaret],
         number_spinners: &[NumberSpinner],
         theme_override: Option<ScrollbarColors>,
+        scale: f64,
         target: &wgpu::Texture,
     ) {
         self.vello.render(
             |scene| {
-                blitz_paint::paint_scene(scene, document, 1.0, self.width, self.height, 0, 0);
-                paint_input_selections(scene, input_selections, 1.0);
-                paint_input_carets(scene, input_carets, 1.0);
+                blitz_paint::paint_scene(scene, document, scale, self.width, self.height, 0, 0);
+                paint_input_selections(scene, input_selections, scale);
+                paint_input_carets(scene, input_carets, scale);
                 crate::scrollbar::paint_scrollbars(
                     scene,
                     document,
                     scrollbars,
-                    1.0,
+                    scale,
                     theme_override,
                 );
-                crate::spinner::paint_number_spinners(scene, number_spinners, 1.0);
+                crate::spinner::paint_number_spinners(scene, number_spinners, scale);
             },
             &mut self.cpu_buffer,
         );

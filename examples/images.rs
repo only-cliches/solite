@@ -165,6 +165,7 @@ impl ApplicationHandler for AppState {
                     (RED_URL.to_string(), self.red_png.clone()),
                     (BLUE_URL.to_string(), self.blue_png.clone()),
                 ],
+                scale_factor: window.scale_factor(),
             },
             &component,
         )

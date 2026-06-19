@@ -81,6 +81,7 @@ impl ApplicationHandler for App {
                 base_url: None,
                 initial_state: None,
             registered_resources: vec![],
+                scale_factor: 1.0,
             },
             &todo_js,
         )

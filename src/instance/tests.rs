@@ -235,6 +235,7 @@ fn dispatch_mouse_click_updates_rust_state() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         ROOT_CLICK_COMPONENT,
     );
@@ -282,6 +283,7 @@ fn take_send_event_error_clears_after_read() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         r#"
             import { render } from "solite-runtime";
@@ -340,6 +342,7 @@ fn dispatch_key_down_and_up_target_focused_node() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         TEXT_INPUT_COMPONENT,
     );
@@ -415,6 +418,7 @@ fn dispatch_focus_events_update_host_state() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         TEXT_INPUT_COMPONENT,
     );
@@ -464,6 +468,7 @@ fn resize_updates_size_and_keeps_click_working() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         CLICK_BUTTON_COMPONENT,
     );
@@ -515,6 +520,7 @@ fn dispatch_mouse_move_updates_hover_state_and_handlers() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         HOVER_COMPONENT,
     );
@@ -601,6 +607,7 @@ fn dispatch_wheel_scrolls_and_dispatches_events() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         WHEEL_SCROLL_COMPONENT,
     );
@@ -674,6 +681,7 @@ fn two_instances_share_device_and_keep_state_independent() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         ROOT_CLICK_COMPONENT,
     );
@@ -688,6 +696,7 @@ fn two_instances_share_device_and_keep_state_independent() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         CLICK_BUTTON_COMPONENT,
     );
@@ -788,6 +797,7 @@ fn reactive_text_child_keeps_same_node_across_renders() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         STABLE_TEXT_COMPONENT,
     );
@@ -861,6 +871,7 @@ fn click_triggers_reactive_list_update() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         REACTIVE_LIST_COMPONENT,
     );
@@ -950,6 +961,7 @@ fn dispatch_wheel_with_reactive_effect_does_not_panic_on_doc_borrow() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         REACTIVE_WHEEL_COMPONENT,
     );
@@ -1010,6 +1022,7 @@ fn make_instance_with(
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         component,
     )
@@ -1724,6 +1737,7 @@ fn document_scroll_scrolls_root_container() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         TALL_COMPONENT,
     );
@@ -1787,6 +1801,7 @@ fn horizontal_overflow_emits_horizontal_scrollbar() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         WIDE_COMPONENT,
     );
@@ -1882,6 +1897,7 @@ fn three_scene_surfaces_keep_horizontal_scrollbar_visible() {
                 base_url: None,
                 initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
             },
             &seeded_source,
         );
@@ -2011,6 +2027,7 @@ fn scrollbar_tracks_are_local_to_each_scene_surface() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         SCROLL_COMPONENT,
     );
@@ -2025,6 +2042,7 @@ fn scrollbar_tracks_are_local_to_each_scene_surface() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         SCROLL_COMPONENT,
     );
@@ -2161,6 +2179,7 @@ fn horizontal_scrollbar_tracks_are_local_to_each_scene_surface() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         SCROLL_COMPONENT,
     );
@@ -2175,6 +2194,7 @@ fn horizontal_scrollbar_tracks_are_local_to_each_scene_surface() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         SCROLL_COMPONENT,
     );
@@ -2304,6 +2324,7 @@ fn horizontal_overflow_emits_without_vertical_scroll() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         WIDE_COMPONENT,
     );
@@ -2367,6 +2388,7 @@ fn inline_overflow_emits_horizontal_scrollbar() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         WIDE_COMPONENT,
     );
@@ -2419,6 +2441,7 @@ fn no_horizontal_scrollbar_for_vertical_only_overflow() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         TALL_WIDE_COMPONENT,
     );
@@ -2471,6 +2494,7 @@ fn flex_inline_overflow_emits_horizontal_scrollbar() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         FLEX_COMPONENT,
     );
@@ -2528,6 +2552,7 @@ fn document_scroll_with_inner_scroll_still_scrolls() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         PANEL_COMPONENT,
     );
@@ -2589,6 +2614,7 @@ fn document_scroll_emits_scrollbar_region() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         TALL_COMPONENT,
     );
@@ -3917,6 +3943,7 @@ fn run_img_test(src_url: &str) -> Vec<Event> {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         &component,
     );
@@ -3999,6 +4026,7 @@ fn dynamic_src_mutation_fires_load_for_each_new_url() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         &component,
     );
@@ -4078,6 +4106,7 @@ fn register_font_bytes_returns_distinct_stylesheet_ids() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         FONT_COMPONENT,
     );
@@ -4108,6 +4137,7 @@ fn register_font_bytes_does_not_panic_during_render() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         FONT_COMPONENT,
     );
@@ -4138,6 +4168,7 @@ fn register_font_from_path_reads_file() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         FONT_COMPONENT,
     );
@@ -4163,6 +4194,7 @@ fn register_font_from_path_rejects_unknown_extension() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         "import { render } from \"solite-runtime\"; render(() => __sol_createElement(\"div\"), __SOL_ROOT__);",
     );
@@ -4274,6 +4306,7 @@ fn make_kb_nav_instance() -> (Instance, tokio::sync::mpsc::UnboundedReceiver<Eve
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         KB_NAV_COMPONENT,
     );
@@ -4544,6 +4577,7 @@ fn make_state_mutation_canary() -> (Instance, StateHandle) {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         CANARY_MUTATION_COMPONENT,
     );
@@ -4832,6 +4866,7 @@ fn automatic_tab_order_walks_all_default_focusables_in_doc_order() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         component,
     );
@@ -4896,6 +4931,7 @@ fn anchor_without_href_is_not_in_automatic_tab_order() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         component,
     );
@@ -4941,6 +4977,7 @@ fn disabled_default_focusable_is_skipped_by_automatic_tab_order() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         component,
     );
@@ -4989,6 +5026,7 @@ fn tabindex_negative_skips_element_from_tab_order() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         component,
     );
@@ -5037,6 +5075,7 @@ fn positive_tabindex_takes_priority_over_doc_order() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         component,
     );
@@ -5163,6 +5202,7 @@ fn ctrl_left_via_dispatch_key_works_end_to_end() {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         component,
     );
@@ -5244,6 +5284,7 @@ fn make_select_nav_instance() -> Instance {
             base_url: None,
             initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
         },
         SELECT_NAV_COMPONENT,
     );
@@ -5544,6 +5585,7 @@ mod todo_example {
                 base_url: None,
                 initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
             },
             &compiled,
         );
@@ -5591,6 +5633,7 @@ mod todo_example {
                 base_url: None,
                 initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
             },
             &compiled,
         );
@@ -5708,6 +5751,7 @@ mod todo_example {
                 base_url: None,
                 initial_state: None,
             registered_resources: vec![],
+            scale_factor: 1.0,
             },
             &compiled,
         );
