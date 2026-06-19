@@ -1,0 +1,28 @@
+[package]
+name = "solite-build"
+version = "0.1.0"
+edition = "2024"
+description = "JSX/TS compiler and ahead-of-time bundler for solite. Lightweight enough to use from a Cargo build script."
+
+[features]
+# The `solite` command-line tool (`init` scaffolder + `build` transpiler).
+# Pulls in clap; the library and build-script API do not need it.
+cli = ["dep:clap"]
+
+[[bin]]
+name = "solite-build"
+path = "src/bin/solite-build/main.rs"
+required-features = ["cli"]
+
+[dependencies]
+oxc_allocator = "0.135.0"
+oxc_ast = "0.135.0"
+oxc_codegen = "0.135.0"
+oxc_diagnostics = "0.135.0"
+oxc_parser = "0.135.0"
+oxc_semantic = "0.135.0"
+oxc_span = "0.135.0"
+oxc_transformer = "0.135.0"
+relative-path = "1"
+serde_json = "1"
+clap = { version = "4", features = ["derive"], optional = true }
