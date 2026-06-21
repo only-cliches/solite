@@ -1,9 +1,8 @@
-//! Opt-in GPU bootstrap helpers (`gpu` feature).
+//! GPU bootstrap helpers.
 //!
 //! Creating a wgpu device/queue — and, for windowed apps, a configured surface —
-//! is the same boilerplate in every host. These helpers package it up. They add
-//! no dependencies beyond wgpu (which solite already uses); the feature only
-//! gates the extra API surface.
+//! is the same boilerplate in every host. These helpers package it up. solite
+//! always renders on the GPU (Vello on wgpu), so these are always available.
 //!
 //! Headless (offscreen rendering):
 //!

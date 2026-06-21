@@ -27,7 +27,7 @@ use solite::winit::{A11yAdapter, WinitBridge, accesskit_winit};
 use solite::{
     Instance, InstanceConfig,
     capture::{capture_path_from_cli, capture_texture_to_png},
-    gpu::{BlitContext, BlitDraw, present_to_surface},
+    gpu::{BlitDraw, present_to_surface},
 };
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -151,9 +151,7 @@ impl ApplicationHandler<accesskit_winit::Event> for App {
             InstanceConfig {
                 width: w,
                 height: h,
-                #[cfg(feature = "gpu")]
                 device: gpu.device.clone(),
-                #[cfg(feature = "gpu")]
                 queue: gpu.queue.clone(),
                 stylesheets: vec![CSS.to_string()],
                 document_scroll: true,

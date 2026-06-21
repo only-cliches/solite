@@ -505,9 +505,7 @@ fn mount_targets(
             .mount_live(InstanceConfig {
                 width,
                 height,
-                #[cfg(feature = "gpu")]
                 device: Arc::clone(device),
-                #[cfg(feature = "gpu")]
                 queue: Arc::clone(queue),
                 stylesheets: vec![],
                 document_scroll: true,

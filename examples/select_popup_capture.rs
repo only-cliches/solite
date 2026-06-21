@@ -4,17 +4,13 @@
 
 use std::path::PathBuf;
 
-#[cfg(feature = "gpu")]
 #[path = "common/headless.rs"]
 mod headless;
 
-#[cfg(feature = "gpu")]
 use solite::capture::capture_texture_to_png;
 #[cfg(feature = "jsx-compiler")]
 use solite::compile_component_source;
 use solite::{Instance, InstanceConfig, MouseButton, MouseEvent, capture::capture_path_from_cli};
-#[cfg(feature = "gpu")]
-use wgpu;
 
 // Mirror `kitchen_sink`'s JSX select pattern: an `onChange` handler that
 // writes global state and a controlled `value` binding so this example
@@ -79,7 +75,6 @@ const CSS: &str = r#"
 "#;
 
 fn main() {
-    #[cfg(feature = "gpu")]
     {
         let output =
             capture_path_from_cli().unwrap_or_else(|| PathBuf::from("captures/select_popup.png"));
@@ -156,11 +151,6 @@ fn main() {
             std::process::exit(1);
         }
         println!("captured to {}", output.display());
-    }
-
-    #[cfg(not(feature = "gpu"))]
-    {
-        panic!("select_popup_capture example requires the `gpu` feature");
     }
 }
 

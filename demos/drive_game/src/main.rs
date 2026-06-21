@@ -27,6 +27,7 @@ struct App {
     car: CarState,
     last_frame: Instant,
     fps: f32,
+    frame_ms: f32,
     occluded: bool,
 }
 
@@ -43,6 +44,7 @@ impl Default for App {
             car: CarState::default(),
             last_frame: Instant::now(),
             fps: 0.0,
+            frame_ms: 0.0,
             occluded: false,
         }
     }
@@ -106,13 +108,21 @@ impl App {
                 self.fps * 0.90 + instant_fps * 0.10
             };
         }
+
+        // Time the actual per-frame work — simulation + HUD + command encoding
+        // and submission — excluding the vsync-bound surface acquire and
+        // present below. `update_state` shows the previous frame's measurement
+        // (a one-frame lag), which is standard for an on-screen frame timer.
+        let work_start = Instant::now();
+
         let _ = hud.maybe_reload(self.car);
         hud.poll_events();
         self.car.update(self.input, dt, hud.max_speed_mps());
 
-        hud.update_state(self.car, self.fps);
+        hud.update_state(self.car, self.fps, self.frame_ms);
         hud.tick();
         let hud_draw = hud.draw();
+        let cpu_pre = work_start.elapsed();
 
         let frame = match gpu.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
@@ -134,6 +144,7 @@ impl App {
             wgpu::CurrentSurfaceTexture::Validation => return,
         };
 
+        let render_start = Instant::now();
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -163,6 +174,15 @@ impl App {
         );
 
         gpu.context.queue.submit([encoder.finish()]);
+
+        // Total CPU work this frame: simulation/HUD + command encoding/submit.
+        let instant_ms = (cpu_pre + render_start.elapsed()).as_secs_f32() * 1000.0;
+        self.frame_ms = if self.frame_ms <= 0.0 {
+            instant_ms
+        } else {
+            self.frame_ms * 0.90 + instant_ms * 0.10
+        };
+
         frame.present();
         if let Some(window) = &window {
             window.request_redraw();

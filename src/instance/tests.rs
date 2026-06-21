@@ -197,6 +197,13 @@ fn test_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
     pollster::block_on(make_test_device())
 }
 
+/// Render `instance` and read its output texture back into tightly-packed RGBA8.
+/// Thin wrapper over the public `Instance::read_pixels` (tests run at
+/// `scale_factor: 1.0`, so physical == logical pixels).
+fn read_texture_rgba(instance: &mut Instance) -> Vec<u8> {
+    instance.read_pixels()
+}
+
 fn make_key_event(
     key: &str,
     code: &str,
@@ -1551,11 +1558,7 @@ fn hover_pseudo_class_actually_paints_new_color() {
     let (mut instance, _rx) = make_instance_with(COMPONENT, &[css]);
 
     let read_pixel = |instance: &mut Instance, x: u32, y: u32| -> (u8, u8, u8) {
-        let _ = instance.render();
-        // The painter writes into its internal cpu_buffer before uploading
-        // to the texture. We can't read back the texture without a copy
-        // operation, but cpu_buffer is the same RGBA8 source. Reach in.
-        let buf = &instance.painter.cpu_buffer;
+        let buf = read_texture_rgba(instance);
         let row = (instance.width * 4) as usize;
         let i = (y as usize) * row + (x as usize) * 4;
         (buf[i], buf[i + 1], buf[i + 2])
@@ -1665,7 +1668,7 @@ fn scrollbar_thumb_drag_moves_scroll_offset() {
 #[test]
 fn scrollbar_theme_paints_supplied_colors() {
     // Container sized so the scrollbar lives well inside the 100x100
-    // painter texture; the test reads back pixels from cpu_buffer.
+    // painter texture; the test reads pixels back from the output texture.
     const COMPONENT: &str = r#"
             import { render } from "solite-runtime";
             function App() {
@@ -1690,11 +1693,8 @@ fn scrollbar_theme_paints_supplied_colors() {
     let tx = (region.thumb.0 + region.thumb.2 * 0.5) as usize;
     let ty = (region.thumb.1 + region.thumb.3 * 0.5) as usize;
     let i = ty * row + tx * 4;
-    let (r, g, b) = (
-        instance.painter.cpu_buffer[i],
-        instance.painter.cpu_buffer[i + 1],
-        instance.painter.cpu_buffer[i + 2],
-    );
+    let buf = read_texture_rgba(&mut instance);
+    let (r, g, b) = (buf[i], buf[i + 1], buf[i + 2]);
     // Allow a few-byte rounding tolerance from Vello's sampler.
     assert!(
         r > 200 && g < 60 && b < 60,
@@ -1970,10 +1970,10 @@ fn three_scene_surfaces_keep_horizontal_scrollbar_visible() {
         .expect("right surface should expose a horizontal scrollbar");
 
     let read_pixel = |instance: &mut Instance, x: f32, y: f32| -> (u8, u8, u8, u8) {
-        let buf = &instance.painter.cpu_buffer;
         let width = (instance.width as usize) * 4;
         let ix = (x.max(0.0) as usize).min(instance.width.saturating_sub(1) as usize);
         let iy = (y.max(0.0) as usize).min(instance.height.saturating_sub(1) as usize);
+        let buf = read_texture_rgba(instance);
         let idx = iy * width + ix * 4;
         (buf[idx], buf[idx + 1], buf[idx + 2], buf[idx + 3])
     };

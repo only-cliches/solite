@@ -3,6 +3,11 @@ name = "solite-build"
 version = "0.1.0"
 edition = "2024"
 description = "JSX/TS compiler and ahead-of-time bundler for solite. Lightweight enough to use from a Cargo build script."
+repository = "https://github.com/only-cliches/solite"
+homepage = "https://github.com/only-cliches/solite"
+license = "MIT"
+keywords = ["jsx", "compiler", "bundler", "solite"]
+categories = ["development-tools::build-utils", "compilers"]
 
 [features]
 # The `solite` command-line tool (`init` scaffolder + `build` transpiler).

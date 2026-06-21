@@ -4858,6 +4858,7 @@ dependencies = [
  "stylo_dom",
  "tokio",
  "url",
+ "vello",
  "wgpu",
  "winit",
 ]

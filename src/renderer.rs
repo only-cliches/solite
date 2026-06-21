@@ -1,16 +1,12 @@
-use anyrender::ImageRenderer;
 use anyrender::PaintScene;
-use anyrender_vello::VelloImageRenderer;
 use blitz_dom::BaseDocument;
 use kurbo::{Affine, Rect};
 use peniko::Fill;
-#[cfg(feature = "gpu")]
 use std::sync::Arc;
-#[cfg(feature = "gpu")]
-use wgpu;
 
 use crate::scrollbar::{ScrollbarColors, ScrollbarRegion};
 use crate::spinner::NumberSpinner;
+use crate::vello_scene::{TextureHandles, VelloScenePainter};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct InputCaret {
@@ -29,57 +25,56 @@ pub(crate) struct InputSelection {
     pub height: f32,
 }
 
-/// Renderer: blitz-dom layout + paint → CPU RGBA8 buffer, optionally uploaded to
-// a GPU texture when that output is enabled.
+/// Renderer: blitz-dom layout + paint via Vello.
+///
+/// Vello paints **directly into the host-owned wgpu texture** on the host
+/// device — no CPU readback and no re-upload.
 pub(crate) struct Painter {
-    #[cfg(feature = "gpu")]
-    queue: Arc<wgpu::Queue>,
     width: u32,
     height: u32,
-    vello: VelloImageRenderer,
-    pub(crate) cpu_buffer: Vec<u8>,
-    padded_buffer: Vec<u8>,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    vello: vello::Renderer,
+    scene: vello::Scene,
+    /// Vello image handles for any `<img>`/`background-image` textures
+    /// registered while painting the scene.
+    texture_handles: TextureHandles,
 }
 
 impl Painter {
-    #[cfg(feature = "gpu")]
     pub fn new(
-        _device: Arc<wgpu::Device>,
+        device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         width: u32,
         height: u32,
     ) -> Self {
-        let pixel_len = (width * height * 4) as usize;
+        let vello = vello::Renderer::new(
+            &device,
+            vello::RendererOptions {
+                use_cpu: false,
+                num_init_threads: vello_init_threads(),
+                antialiasing_support: vello::AaSupport::area_only(),
+                pipeline_cache: None,
+            },
+        )
+        .expect("create vello renderer on host device");
         Self {
+            width,
+            height,
+            device,
             queue,
-            width,
-            height,
-            vello: VelloImageRenderer::new(width, height),
-            cpu_buffer: vec![0u8; pixel_len],
-            padded_buffer: Vec::new(),
+            vello,
+            scene: vello::Scene::new(),
+            texture_handles: TextureHandles::default(),
         }
     }
 
-    #[cfg(not(feature = "gpu"))]
-    pub fn new(width: u32, height: u32) -> Self {
-        let pixel_len = (width * height * 4) as usize;
-        Self {
-            width,
-            height,
-            vello: VelloImageRenderer::new(width, height),
-            cpu_buffer: vec![0u8; pixel_len],
-            padded_buffer: Vec::new(),
-        }
+    /// The host queue, so the instance can read the rendered texture back.
+    pub(crate) fn queue(&self) -> &Arc<wgpu::Queue> {
+        &self.queue
     }
 
-    #[cfg(not(feature = "gpu"))]
-    pub(crate) fn pixel_bytes(&self) -> &[u8] {
-        &self.cpu_buffer
-    }
-
-    /// Resolve document layout and paint into `target` (or CPU memory when no
-    /// GPU backend is enabled).
-    #[cfg(feature = "gpu")]
+    /// Resolve document layout and paint directly into `target`.
     pub fn paint(
         &mut self,
         document: &mut BaseDocument,
@@ -91,112 +86,63 @@ impl Painter {
         scale: f64,
         target: &wgpu::Texture,
     ) {
-        self.cpu_buffer.fill(0);
-
-        self.vello.render(
-            |scene| {
-                blitz_paint::paint_scene(scene, document, scale, self.width, self.height, 0, 0);
-                paint_input_selections(scene, input_selections, scale);
-                paint_input_carets(scene, input_carets, scale);
-                crate::scrollbar::paint_scrollbars(
-                    scene,
-                    document,
-                    scrollbars,
-                    scale,
-                    theme_override,
-                );
-                crate::spinner::paint_number_spinners(scene, number_spinners, scale);
-            },
-            &mut self.cpu_buffer,
-        );
-
         if self.width == 0 || self.height == 0 {
             return;
         }
 
-        let row_bytes = self.width.saturating_mul(4) as usize;
-        let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
-        let padded_row_bytes = if row_bytes == 0 {
-            0
-        } else {
-            row_bytes.next_multiple_of(alignment)
-        };
+        // Build the Vello scene from the resolved document + overlays.
+        self.scene.reset();
+        {
+            let mut scene =
+                VelloScenePainter::new(&mut self.vello, &mut self.texture_handles, &mut self.scene);
+            blitz_paint::paint_scene(&mut scene, document, scale, self.width, self.height, 0, 0);
+            paint_input_selections(&mut scene, input_selections, scale);
+            paint_input_carets(&mut scene, input_carets, scale);
+            crate::scrollbar::paint_scrollbars(&mut scene, document, scrollbars, scale, theme_override);
+            crate::spinner::paint_number_spinners(&mut scene, number_spinners, scale);
+        }
 
-        let (upload_buffer, bytes_per_row) = if padded_row_bytes == row_bytes {
-            (self.cpu_buffer.as_slice(), row_bytes)
-        } else {
-            let Some(required_len) = padded_row_bytes.checked_mul(self.height as usize) else {
-                return;
-            };
-            self.padded_buffer.resize(required_len, 0);
-            self.padded_buffer.fill(0);
-            for y in 0..self.height as usize {
-                let src_start = y * row_bytes;
-                let dst_start = y * padded_row_bytes;
-                self.padded_buffer[dst_start..(dst_start + row_bytes)]
-                    .copy_from_slice(&self.cpu_buffer[src_start..(src_start + row_bytes)]);
-            }
-            (self.padded_buffer.as_slice(), padded_row_bytes)
-        };
+        // Rasterize straight into the host texture on the host device. No CPU
+        // readback, no re-upload. `target` must be `Rgba8Unorm` with
+        // `STORAGE_BINDING` (see `Instance` texture allocation).
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        self.vello
+            .render_to_texture(
+                &self.device,
+                &self.queue,
+                &self.scene,
+                &view,
+                &vello::RenderParams {
+                    base_color: peniko::Color::TRANSPARENT,
+                    width: self.width,
+                    height: self.height,
+                    antialiasing_method: vello::AaConfig::Area,
+                },
+            )
+            .expect("vello render_to_texture");
 
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: target,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            upload_buffer,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row as u32),
-                rows_per_image: Some(self.height),
-            },
-            wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
-        );
-    }
-
-    #[cfg(not(feature = "gpu"))]
-    pub fn paint(
-        &mut self,
-        document: &mut BaseDocument,
-        scrollbars: &[ScrollbarRegion],
-        input_selections: &[InputSelection],
-        input_carets: &[InputCaret],
-        number_spinners: &[NumberSpinner],
-        theme_override: Option<ScrollbarColors>,
-        scale: f64,
-    ) {
-        self.cpu_buffer.fill(0);
-
-        self.vello.render(
-            |scene| {
-                blitz_paint::paint_scene(scene, document, scale, self.width, self.height, 0, 0);
-                paint_input_selections(scene, input_selections, scale);
-                paint_input_carets(scene, input_carets, scale);
-                crate::scrollbar::paint_scrollbars(
-                    scene,
-                    document,
-                    scrollbars,
-                    scale,
-                    theme_override,
-                );
-                crate::spinner::paint_number_spinners(scene, number_spinners, scale);
-            },
-            &mut self.cpu_buffer,
-        );
+        // Free the scene's retained geometry until the next frame.
+        self.scene.reset();
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
+        // Vello is resolution-independent: the target texture is reallocated by
+        // the caller and the size is passed via `RenderParams` each frame.
         self.width = width;
         self.height = height;
-        self.cpu_buffer.resize((width * height * 4) as usize, 0);
-        self.padded_buffer.clear();
-        self.vello.resize(width, height);
+    }
+}
+
+/// Vello's recommended shader-init threading: single-threaded on macOS (a known
+/// driver workaround), all cores elsewhere. Mirrors `anyrender_vello`.
+fn vello_init_threads() -> Option<std::num::NonZeroUsize> {
+    #[cfg(target_os = "macos")]
+    {
+        std::num::NonZeroUsize::new(1)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
     }
 }
 

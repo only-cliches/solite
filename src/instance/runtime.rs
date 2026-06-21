@@ -93,11 +93,7 @@ impl Instance {
 
     /// Resolve layout and paint the document into the output texture.
     ///
-    /// Returns either:
-    /// - a reference to a GPU [`wgpu::TextureView`] when the `gpu` feature is
-    ///   enabled;
-    /// - raw RGBA pixel bytes when running in CPU mode.
-    #[cfg(feature = "gpu")]
+    /// Returns a reference to the GPU [`wgpu::TextureView`] backing the paint.
     pub fn render(&mut self) -> &wgpu::TextureView {
         // Resolve CSS + layout.
         self.sync_input_render_text_before_layout();
@@ -142,60 +138,69 @@ impl Instance {
         &self.texture_view
     }
 
-    #[cfg(not(feature = "gpu"))]
-    pub fn render(&mut self) -> &[u8] {
-        // Resolve CSS + layout.
-        self.sync_input_render_text_before_layout();
-        self.doc.borrow_mut().resolve(0.0);
-        self.sync_input_render_text_before_layout();
-
-        // Compute scrollbar geometry from the resolved layout — final_layout
-        // and scroll_offset are now current. Reused by dispatch_mouse for
-        // scrollbar hit-testing this frame.
-        self.scrollbars = collect_scrollbar_regions(&self.doc.borrow());
-        let number_input_ids: Vec<usize> = {
-            let inputs = self.js.inputs.borrow();
-            inputs
-                .iter()
-                .filter(|(_, s)| s.is_number())
-                .map(|(&id, _)| id)
-                .collect()
-        };
-        self.spinners =
-            crate::spinner::collect_number_spinners(&self.doc.borrow(), &number_input_ids);
-        let input_selections = self.collect_input_selections();
-        let input_carets = self.collect_input_carets();
-
-        // Paint into the CPU buffer.
-        {
-            let mut doc = self.doc.borrow_mut();
-            let masked_focus = self.mask_blitz_text_input_focus_for_paint(&mut doc);
-            self.painter.paint(
-                &mut doc,
-                &self.scrollbars,
-                &input_selections,
-                &input_carets,
-                &self.spinners,
-                self.scrollbar_theme,
-                self.scale_factor,
-            );
-            self.restore_blitz_text_input_focus_after_paint(&mut doc, masked_focus);
-        }
-        self.needs_paint = false;
-
-        self.painter.pixel_bytes()
-    }
-
-    /// Access the instance CPU pixel output for the last paint (CPU mode).
-    #[cfg(not(feature = "gpu"))]
-    pub fn pixel_bytes(&self) -> &[u8] {
-        self.painter.pixel_bytes()
-    }
-
     /// Access the instance output texture backing the last paint.
-    #[cfg(feature = "gpu")]
     pub fn texture(&self) -> &wgpu::Texture {
         &self.texture
+    }
+
+    /// Render and read the output texture back into tightly-packed RGBA8 bytes
+    /// at the texture's physical dimensions. This pays a GPU→CPU readback, so
+    /// it is meant for capture / headless use, not the per-frame hot path.
+    pub fn read_pixels(&mut self) -> Vec<u8> {
+        let _ = self.render();
+
+        let width = self.texture.width();
+        let height = self.texture.height();
+        let queue = self.painter.queue();
+
+        let unpadded = (width * 4) as usize;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+        let padded = unpadded.div_ceil(align) * align;
+
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("solite read_pixels"),
+            size: (padded * height as usize) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded as u32),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit([encoder.finish()]);
+
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map read_pixels buffer"));
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll read_pixels");
+        let data = slice.get_mapped_range();
+        let mut pixels = Vec::with_capacity(unpadded * height as usize);
+        for row in 0..height as usize {
+            let start = row * padded;
+            pixels.extend_from_slice(&data[start..start + unpadded]);
+        }
+        pixels
     }
 
     /// Resize the output texture and viewport.
@@ -208,29 +213,30 @@ impl Instance {
         let phys_w = ((width as f64) * self.scale_factor).round() as u32;
         let phys_h = ((height as f64) * self.scale_factor).round() as u32;
 
-        #[cfg(feature = "gpu")]
-        {
-            // Reallocate texture at physical pixel dimensions.
-            self.texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("solite"),
-                size: wgpu::Extent3d {
-                    width: phys_w,
-                    height: phys_h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_DST
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
-            self.texture_view = self
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-        }
+        // Reallocate texture at physical pixel dimensions.
+        self.texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("solite"),
+            size: wgpu::Extent3d {
+                width: phys_w,
+                height: phys_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            // STORAGE_BINDING lets Vello paint into this texture directly
+            // (see renderer::Painter). Kept in sync with the allocation in
+            // instance/constructor.rs.
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        self.texture_view = self
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         // Update blitz viewport.
         let viewport = Viewport {

@@ -23,7 +23,6 @@ use serde_json::json;
 #[cfg(feature = "jsx-compiler")]
 use solite::compile_component_source;
 use solite::{Instance, InstanceConfig};
-#[cfg(feature = "gpu")]
 use wgpu;
 
 fn parse_arg(index: usize, default: usize) -> usize {
@@ -130,9 +129,7 @@ fn run_benchmark(
         InstanceConfig {
             width: width as u32,
             height: height as u32,
-            #[cfg(feature = "gpu")]
             device: device.clone(),
-            #[cfg(feature = "gpu")]
             queue: queue.clone(),
             stylesheets: vec![],
             document_scroll: false,

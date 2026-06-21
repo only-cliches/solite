@@ -2,6 +2,13 @@
 name = "solite"
 version = "0.1.0"
 edition = "2024"
+description = "Embeddable, GPU-accelerated UI for games and native apps: SolidJS reactivity + real HTML/CSS, rendered with Blitz on wgpu."
+repository = "https://github.com/only-cliches/solite"
+homepage = "https://github.com/only-cliches/solite"
+license = "MIT"
+readme = "README.md"
+keywords = ["ui", "gui", "gamedev", "solidjs", "wgpu"]
+categories = ["gui", "game-development", "rendering"]
 
 [workspace]
 members = ["solite-build", "demos/drive_game"]
@@ -13,16 +20,13 @@ resolver = "2"
 default = ["with_system_fonts", "jsx-compiler"]
 with_system_fonts = ["blitz-dom/system_fonts"]
 jsx-compiler = ["dep:solite-build"]
-# Opt-in GPU bootstrap helpers (`solite::gpu`): device/queue + windowed surface
-# setup.
-gpu = ["dep:wgpu"]
 # Optional screenshot capture helper (`solite::capture`) with opt-in `image` support.
-# Capture helpers can run from CPU pixels or GPU textures.
+# Reads back the rendered GPU texture into a PNG.
 capture = ["dep:image"]
 # Opt-in winit translation layer. Pulls in `winit` as a regular dep so hosts
 # can use the `solite::winit` helpers to forward window events into an
 # `Instance` without hand-rolling key/mouse/modifier translation.
-winit = ["dep:winit", "gpu"]
+winit = ["dep:winit"]
 # Opt-in accessibility integration. Exposes `Instance::accessibility_tree`
 # (an enriched accesskit tree) + `perform_accessibility_action`, and the
 # `solite::winit::A11yAdapter` wrapper over `accesskit_winit` so screen
@@ -36,13 +40,17 @@ blitz-paint = { version = "=0.3.0-alpha.4", path = "vendor/blitz/packages/blitz-
 blitz-traits = { version = "=0.3.0-alpha.4", path = "vendor/blitz/packages/blitz-traits" }
 anyrender = "0.11"
 anyrender_vello = "0.11"
+# Used directly by the paint path to render straight into a host-owned texture
+# (see src/vello_scene.rs). Pinned to the version anyrender_vello 0.11 resolves
+# to so the vello::Scene types are identical.
+vello = { version = "=0.9.0", features = ["wgpu"] }
 kurbo = "0.13"
 peniko = "0.6"
 parley = { version = "0.10", default-features = false, features = ["std"] }
 stylo = "0.18"
 style_dom = { version = "0.18", package = "stylo_dom" }
 relative-path = "1"
-wgpu = { version = "29", optional = true }
+wgpu = { version = "29" }
 rquickjs = { version = "0.9", features = ["loader", "macro"] }
 tokio = { version = "1", features = ["sync"] }
 serde_json = "1"
@@ -75,27 +83,27 @@ arboard = "3.4"
 [[example]]
 name = "winit_window"
 path = "examples/winit_window.rs"
-required-features = ["winit", "gpu", "capture", "jsx-compiler"]
+required-features = ["winit", "capture", "jsx-compiler"]
 
 [[example]]
 name = "two_instances"
 path = "examples/two_instances.rs"
-required-features = ["winit", "gpu", "capture", "jsx-compiler"]
+required-features = ["winit", "capture", "jsx-compiler"]
 
 [[example]]
 name = "text_input"
 path = "examples/text_input.rs"
-required-features = ["winit", "gpu", "capture", "jsx-compiler"]
+required-features = ["winit", "capture", "jsx-compiler"]
 
 [[example]]
 name = "kitchen_sink"
 path = "examples/kitchen_sink.rs"
-required-features = ["winit", "gpu", "capture", "jsx-compiler"]
+required-features = ["winit", "capture", "jsx-compiler"]
 
 [[example]]
 name = "todo"
 path = "examples/todo.rs"
-required-features = ["winit", "gpu", "jsx-compiler"]
+required-features = ["winit", "jsx-compiler"]
 
 [[example]]
 name = "offscreen_capture"
@@ -105,24 +113,24 @@ required-features = ["capture", "jsx-compiler"]
 [[example]]
 name = "images"
 path = "examples/images.rs"
-required-features = ["winit", "gpu", "capture", "jsx-compiler"]
+required-features = ["winit", "capture", "jsx-compiler"]
 
 [[example]]
 name = "custom_font"
 path = "examples/custom_font.rs"
-required-features = ["winit", "gpu", "capture", "jsx-compiler"]
+required-features = ["winit", "capture", "jsx-compiler"]
 
 [[example]]
 name = "select_popup_capture"
 path = "examples/select_popup_capture.rs"
-required-features = ["capture", "gpu", "jsx-compiler"]
+required-features = ["capture", "jsx-compiler"]
 
 [[example]]
 name = "perf_animate_elements"
 path = "examples/perf_animate_elements.rs"
-required-features = ["gpu", "jsx-compiler"]
+required-features = ["jsx-compiler"]
 
 [[example]]
 name = "a11y_touch"
 path = "examples/a11y_touch.rs"
-required-features = ["a11y", "gpu", "capture", "jsx-compiler"]
+required-features = ["a11y", "capture", "jsx-compiler"]

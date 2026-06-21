@@ -83,9 +83,7 @@ impl ApplicationHandler for TwoApp {
             InstanceConfig {
                 width: 200,
                 height: 200,
-                #[cfg(feature = "gpu")]
                 device: gpu.device.clone(),
-                #[cfg(feature = "gpu")]
                 queue: gpu.queue.clone(),
                 stylesheets: vec![SHARED_CSS.to_string()],
                 document_scroll: false,
@@ -101,9 +99,7 @@ impl ApplicationHandler for TwoApp {
             InstanceConfig {
                 width: 200,
                 height: 200,
-                #[cfg(feature = "gpu")]
                 device: gpu.device.clone(),
-                #[cfg(feature = "gpu")]
                 queue: gpu.queue.clone(),
                 stylesheets: vec![SHARED_CSS.to_string()],
                 document_scroll: false,

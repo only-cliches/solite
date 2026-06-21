@@ -69,9 +69,7 @@ impl ApplicationHandler for App {
             InstanceConfig {
                 width,
                 height,
-                #[cfg(feature = "gpu")]
                 device: gpu.device.clone(),
-                #[cfg(feature = "gpu")]
                 queue: gpu.queue.clone(),
                 stylesheets: vec![TODO_CSS.to_string()],
                 document_scroll: true,

@@ -30,9 +30,7 @@ pub struct InstanceConfig {
     /// the blit onto the OS surface is 1:1 and crisp on HiDPI displays. Pass
     /// `window.scale_factor()` from winit. Defaults to `1.0` (non-HiDPI).
     pub scale_factor: f64,
-    #[cfg(feature = "gpu")]
     pub device: Arc<wgpu::Device>,
-    #[cfg(feature = "gpu")]
     pub queue: Arc<wgpu::Queue>,
     /// Stylesheets registered before the first paint. Each entry is a CSS
     /// source string. Equivalent to calling [`Instance::add_stylesheet`] after
@@ -188,14 +186,11 @@ pub struct Instance {
     width: u32,
     height: u32,
     scale_factor: f64,
-    #[cfg(feature = "gpu")]
     device: Arc<wgpu::Device>,
     doc: Rc<RefCell<BaseDocument>>,
     js: JsContext,
     painter: Painter,
-    #[cfg(feature = "gpu")]
     texture: wgpu::Texture,
-    #[cfg(feature = "gpu")]
     texture_view: wgpu::TextureView,
     state: StateHandle,
     #[allow(dead_code)]
@@ -296,5 +291,4 @@ impl FileWatch {
 }
 
 #[cfg(test)]
-#[cfg(all(test, feature = "gpu"))]
 mod tests;

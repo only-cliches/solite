@@ -10,6 +10,7 @@ type TelemetryKey =
   | "x"
   | "y"
   | "fps"
+  | "frameMs"
   | "maxSpeed";
 
 declare global {
@@ -29,6 +30,7 @@ const telemetryKeys: Record<TelemetryKey, TelemetryKey> = {
   x: "x",
   y: "y",
   fps: "fps",
+  frameMs: "frameMs",
   maxSpeed: "maxSpeed",
 };
 
@@ -71,6 +73,7 @@ function App() {
   const x = () => numberValue("x");
   const y = () => numberValue("y");
   const fps = () => numberValue("fps");
+  const frameMs = () => numberValue("frameMs");
   const mode = () => String(globalThis.state.mode || "live");
   const maxSpeed = () => numberValue("maxSpeed", MAX_MPH);
 
@@ -176,8 +179,16 @@ function App() {
       </section>
 
       <section class="fps-card">
-        <div class="fps-label">FPS</div>
-        <div class="fps-value">{() => fps().toFixed(0)}</div>
+        <div class="fps-row">
+          <div class="fps-metric">
+            <div class="fps-label">FPS</div>
+            <div class="fps-value">{() => fps().toFixed(0)}</div>
+          </div>
+          <div class="fps-metric">
+            <div class="fps-label">MS</div>
+            <div class="fps-value">{() => frameMs().toFixed(1)}</div>
+          </div>
+        </div>
       </section>
 
       {() =>

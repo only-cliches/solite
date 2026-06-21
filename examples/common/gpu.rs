@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
-#[cfg(feature = "gpu")]
 use solite::gpu::BlitContext;
 use wgpu;
 use winit::window::Window;
 
-#[cfg(feature = "gpu")]
 pub struct Gpu {
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
@@ -14,7 +12,6 @@ pub struct Gpu {
     pub blit: BlitContext,
 }
 
-#[cfg(feature = "gpu")]
 pub async fn init_gpu(window: Arc<Window>, device_label: &str) -> Gpu {
     let size = window.inner_size();
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {

@@ -101,7 +101,7 @@ impl Hud {
         self.instance.resize(self.width, self.height);
     }
 
-    pub fn update_state(&mut self, car: CarState, fps: f32) {
+    pub fn update_state(&mut self, car: CarState, fps: f32, frame_ms: f32) {
         let state = self.instance.state();
         state.set("mode", json!(mode_label()));
         state.set("speedMph", json!(car.speed_mph()));
@@ -112,6 +112,7 @@ impl Hud {
         state.set("x", json!(car.x));
         state.set("y", json!(car.y));
         state.set("fps", json!(fps));
+        state.set("frameMs", json!(frame_ms));
         // Echo the authoritative cap back so the slider fill/handle track it
         // through the Rust→JS reactive path, regardless of where it changed.
         state.set("maxSpeed", json!(self.max_speed_mph));
@@ -297,7 +298,7 @@ mod tests {
         )
         .expect("mount hud");
 
-        hud.update_state(CarState::default(), 0.0);
+        hud.update_state(CarState::default(), 0.0, 0.0);
         hud.tick();
     }
 
@@ -318,7 +319,7 @@ mod tests {
             CarState::default(),
         )
         .expect("mount hud");
-        hud.update_state(CarState::default(), 60.0);
+        hud.update_state(CarState::default(), 60.0, 16.67);
         hud.tick();
         let _ = hud.draw(); // force a layout pass so hit-testing has geometry
 
@@ -358,7 +359,7 @@ mod tests {
             CarState::default(),
         )
         .expect("mount hud");
-        hud.update_state(CarState::default(), 60.0);
+        hud.update_state(CarState::default(), 60.0, 16.67);
         hud.tick();
         let _ = hud.draw();
 
@@ -367,7 +368,7 @@ mod tests {
         hud.dispatch_mouse(sx, 108.0, MouseEvent::Down { x: sx, y: 108.0, button: MouseButton::Left });
         hud.poll_events();
         // Let the full-screen capture overlay mount.
-        hud.update_state(CarState::default(), 60.0);
+        hud.update_state(CarState::default(), 60.0, 16.67);
         hud.tick();
         let _ = hud.draw();
 
@@ -385,7 +386,7 @@ mod tests {
         // Releasing ends the drag: a later move no longer changes the value.
         hud.dispatch_mouse(220.0, 600.0, MouseEvent::Up { x: 220.0, y: 600.0, button: MouseButton::Left });
         hud.poll_events();
-        hud.update_state(CarState::default(), 60.0);
+        hud.update_state(CarState::default(), 60.0, 16.67);
         hud.tick();
         let _ = hud.draw();
         hud.dispatch_mouse(sx, 108.0, MouseEvent::Move { x: sx, y: 108.0 });
@@ -408,7 +409,7 @@ mod tests {
         width: u32,
         height: u32,
     ) -> Vec<u8> {
-        hud.update_state(car, 60.0);
+        hud.update_state(car, 60.0, 16.67);
         hud.tick();
         let draw = hud.draw();
 
@@ -537,7 +538,7 @@ mod tests {
 
         let mut hud = Hud::new(device.clone(), queue.clone(), width, height, 1.0, car)
             .expect("mount hud");
-        hud.update_state(car, 60.0);
+        hud.update_state(car, 60.0, 16.67);
         hud.tick();
         let _ = hud.draw(); // layout pass so the slider press hit-tests
 
@@ -550,7 +551,7 @@ mod tests {
             hud.dispatch_mouse(x, y, MouseEvent::Down { x, y, button: MouseButton::Left });
             hud.poll_events();
         }
-        hud.update_state(car, 60.0);
+        hud.update_state(car, 60.0, 16.67);
         hud.tick();
         let hud_draw = hud.draw();
 

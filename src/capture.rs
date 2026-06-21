@@ -25,11 +25,9 @@ pub fn capture_path_from_cli() -> Option<PathBuf> {
     std::env::var_os("SOLITE_CAPTURE").map(PathBuf::from)
 }
 
-#[cfg(feature = "gpu")]
 use std::sync::mpsc;
 
 /// Copy `texture` into `path` as a PNG file.
-#[cfg(feature = "gpu")]
 pub fn capture_texture_to_png(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

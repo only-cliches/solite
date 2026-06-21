@@ -310,12 +310,22 @@ kbd {
     position: absolute;
     left: 26px;
     bottom: 26px;
-    width: 110px;
+    width: 190px;
     padding: 12px 16px;
     border-radius: 14px;
     border: 1px solid rgba(120, 235, 205, 0.22);
     background: linear-gradient(160deg, rgba(12, 22, 26, 0.82), rgba(7, 13, 17, 0.78));
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+}
+
+.fps-row {
+    display: flex;
+    flex-direction: row;
+    gap: 24px;
+}
+
+.fps-metric {
+    display: block;
 }
 
 .fps-label {

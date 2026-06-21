@@ -273,7 +273,7 @@ fn combine_tick_result(a: TickResult, b: TickResult) -> TickResult {
     }
 }
 
-#[cfg(all(test, feature = "gpu"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{InstanceConfig, StateHandle};

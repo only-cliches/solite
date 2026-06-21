@@ -3,7 +3,6 @@ pub mod capture;
 mod events;
 mod focus;
 mod fonts;
-#[cfg(feature = "gpu")]
 pub mod gpu;
 mod img;
 mod input;
@@ -17,6 +16,7 @@ mod select;
 mod spinner;
 mod state;
 mod touch;
+mod vello_scene;
 #[cfg(feature = "winit")]
 mod winit_integration;
 pub mod workflow;

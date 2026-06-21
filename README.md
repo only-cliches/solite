@@ -2,11 +2,9 @@
 
 # solite
 
-**SolidJS reactivity. Real HTML & CSS. Painted on the GPU. Embedded in Rust.**
+**A UI library for games: native on every screen:**
 
-Write your UI in JSX with fine-grained reactivity, lay it out with a real CSS
-engine, and composite it straight into your own `wgpu` scene — no browser, no
-Electron, no DOM diffing.
+**📱 iOS · iPadOS · Android &nbsp;·&nbsp; 🖥️ Windows · macOS · Linux**
 
 </div>
 
@@ -14,18 +12,10 @@ Electron, no DOM diffing.
 
 ## What is this?
 
+Write your UI in TSX or JSX with fine-grained reactivity, lay it out with a real CSS engine, and composite it straight into your own `wgpu` scene — no browser, no Electron, no DOM diffing.
+
 **solite** runs [SolidJS](https://www.solidjs.com/) inside an embedded [QuickJS](https://bellard.org/quickjs/) engine and renders the resulting HTML/CSS with [Blitz](https://github.com/DioxusLabs/blitz) onto a `wgpu` texture. The result is a self-contained, GPU-accelerated UI layer you can drop into a game, a creative-coding tool, a native app, or anything else
 that can hand it a device and a frame loop.
-
-```
-   your JSX/TSX               solite                         your app
- ┌───────────────┐   ┌─────────────────────────-─┐   ┌────────────────────┐
- │  <Counter/>   │──▶│ QuickJS + SolidJS runtime │   │  wgpu device/queue │
- │  styles.css   │   │ Rust ⇄ JS bridge (__sol_) │──▶│  tick() + render() │
- │  state, events│◀──│ Blitz DOM · Stylo · Parley│   │  → UI texture      │
- └───────────────┘   │ blitz-paint · Vello · wgpu│   │  blit / present    │
-                     └─────────────────────-─────┘   └────────────────────┘
-```
 
 It's **passive by design**: solite never owns the event loop or the window. Your
 host pushes state in, drives `tick()` + `render()` each frame, and pulls events
@@ -91,18 +81,9 @@ nodes that changed.
 **⚡ Reactive, the SolidJS way**
 - Fine-grained signals/stores/effects — no re-render, no diffing
 - `globalThis.state` is a real Solid store, patched from Rust every `tick()`
-- `sendEvent(name, payload)` streams typed events back to the host
+- `sendEvent(name, payload)` streams typed events back into rust.
 
-**🎨 A real rendering stack**
-- [Stylo](https://github.com/servo/stylo) for CSS (cascade, selectors, media,
-  gradients, shadows, transforms), [Parley](https://github.com/linebender/parley)
-  for text/shaping, Taffy for flexbox & grid
-- Painted by [blitz-paint](https://github.com/DioxusLabs/blitz) →
-  [Vello](https://github.com/linebender/vello) → `wgpu`
-- SVG, WOFF/custom fonts, images (local, `data:` URLs, and HTTP), HiDPI /
-  scale-factor aware
-
-**🧩 Real widgets & input**
+**🧩 Real HTML5 inspired widgets & input**
 - Text inputs, `<input type=number>` with spinners, range sliders, checkboxes,
   radios, native `<select>` with popups, scrollbars
 - Mouse, keyboard, wheel, and **touch** (gestures + fling momentum)
@@ -131,14 +112,14 @@ nodes that changed.
 cargo run -p solite-drive-game
 
 # Run an example (kitchen sink of widgets, inputs, and styling).
-cargo run --example kitchen_sink --features "winit,gpu,capture,jsx-compiler"
+cargo run --example kitchen_sink --features "winit,capture,jsx-compiler"
 ```
 
 Add it to your own crate:
 
 ```toml
 [dependencies]
-solite = { git = "https://github.com/your-org/solite", features = ["winit", "gpu", "jsx-compiler"] }
+solite = { git = "https://github.com/only-cliches/solite", features = ["winit", "jsx-compiler"] }
 ```
 
 ---
@@ -169,13 +150,15 @@ template.
 | -------------------- | --------------------------------------------------------------------------- |
 | `jsx-compiler` *(default)* | The `solite-build` JSX/TS compiler + AOT bundler                      |
 | `with_system_fonts` *(default)* | Load fonts from the OS                                          |
-| `gpu`                | `solite::gpu` device/queue + windowed-surface bootstrap helpers              |
-| `winit`              | `solite::winit` event-translation bridge (implies `gpu`)                     |
-| `capture`            | `solite::capture` — screenshot CPU pixels or GPU textures to PNG             |
+| `winit`              | `solite::winit` event-translation bridge                                     |
+| `capture`            | `solite::capture` — read the rendered texture back to a PNG                  |
 | `a11y`               | Live AccessKit tree + `accesskit_winit` adapter (implies `winit`)            |
 
-The core library (layout + paint + reactivity) carries none of `wgpu`, `winit`,
-or `image` unless you ask for them.
+solite renders on the GPU via Vello on `wgpu`, so `wgpu` is a core dependency:
+you always hand an `Instance` a `Device`/`Queue` and it paints into a `wgpu`
+texture you own. The `solite::gpu` module (device/queue + windowed-surface
+bootstrap helpers) is always available. `winit` and `image` are pulled in only
+when you ask for them.
 
 ---
 

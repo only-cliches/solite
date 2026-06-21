@@ -38,13 +38,10 @@ fn parse_base_url(base_url: &str) -> Result<Url, InstanceError> {
 
 struct RenderTargets {
     painter: Painter,
-    #[cfg(feature = "gpu")]
     texture: wgpu::Texture,
-    #[cfg(feature = "gpu")]
     texture_view: wgpu::TextureView,
 }
 
-#[cfg(feature = "gpu")]
 fn create_render_targets(
     device: &Arc<wgpu::Device>,
     queue: &Arc<wgpu::Queue>,
@@ -62,7 +59,11 @@ fn create_render_targets(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
+        // STORAGE_BINDING lets Vello paint into this texture directly via its
+        // compute pipeline (see renderer::Painter). COPY_SRC supports the
+        // capture/test readback helpers.
         usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::STORAGE_BINDING
             | wgpu::TextureUsages::COPY_DST
             | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
@@ -74,13 +75,6 @@ fn create_render_targets(
         painter,
         texture,
         texture_view,
-    }
-}
-
-#[cfg(not(feature = "gpu"))]
-fn create_render_targets(width: u32, height: u32) -> RenderTargets {
-    RenderTargets {
-        painter: Painter::new(width, height),
     }
 }
 
@@ -105,9 +99,7 @@ impl Instance {
             base_url: base_url_config,
             initial_state,
             registered_resources,
-            #[cfg(feature = "gpu")]
             device,
-            #[cfg(feature = "gpu")]
             queue,
         } = config;
 
@@ -176,9 +168,7 @@ impl Instance {
 
         // --- render targets ---
         let render_targets = create_render_targets(
-            #[cfg(feature = "gpu")]
             &device,
-            #[cfg(feature = "gpu")]
             &queue,
             phys_w,
             phys_h,
@@ -188,14 +178,11 @@ impl Instance {
             width,
             height,
             scale_factor,
-            #[cfg(feature = "gpu")]
             device,
             doc,
             js,
             painter: render_targets.painter,
-            #[cfg(feature = "gpu")]
             texture: render_targets.texture,
-            #[cfg(feature = "gpu")]
             texture_view: render_targets.texture_view,
             state,
             event_tx,
@@ -286,9 +273,7 @@ impl Instance {
             base_url: base_url_config,
             initial_state,
             registered_resources,
-            #[cfg(feature = "gpu")]
             device,
-            #[cfg(feature = "gpu")]
             queue,
         } = config;
 
@@ -371,9 +356,7 @@ impl Instance {
 
         // --- render targets ---
         let render_targets = create_render_targets(
-            #[cfg(feature = "gpu")]
             &device,
-            #[cfg(feature = "gpu")]
             &queue,
             phys_w,
             phys_h,
@@ -383,14 +366,11 @@ impl Instance {
             width,
             height,
             scale_factor,
-            #[cfg(feature = "gpu")]
             device,
             doc,
             js,
             painter: render_targets.painter,
-            #[cfg(feature = "gpu")]
             texture: render_targets.texture,
-            #[cfg(feature = "gpu")]
             texture_view: render_targets.texture_view,
             state,
             event_tx,
@@ -509,9 +489,7 @@ impl Instance {
             base_url: base_url_config,
             initial_state,
             registered_resources,
-            #[cfg(feature = "gpu")]
             device,
-            #[cfg(feature = "gpu")]
             queue,
         } = config;
 
@@ -581,9 +559,7 @@ impl Instance {
 
         // --- render targets ---
         let render_targets = create_render_targets(
-            #[cfg(feature = "gpu")]
             &device,
-            #[cfg(feature = "gpu")]
             &queue,
             phys_w,
             phys_h,
@@ -593,14 +569,11 @@ impl Instance {
             width,
             height,
             scale_factor,
-            #[cfg(feature = "gpu")]
             device,
             doc,
             js,
             painter: render_targets.painter,
-            #[cfg(feature = "gpu")]
             texture: render_targets.texture,
-            #[cfg(feature = "gpu")]
             texture_view: render_targets.texture_view,
             state,
             event_tx,
