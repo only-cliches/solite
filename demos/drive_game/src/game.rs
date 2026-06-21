@@ -145,19 +145,32 @@ mod tests {
     const MAX: f32 = 22.0; // m/s, ~50 mph
 
     fn down() -> InputState {
-        InputState { brake: true, ..InputState::default() }
+        InputState {
+            brake: true,
+            ..InputState::default()
+        }
     }
 
     fn up() -> InputState {
-        InputState { throttle: true, ..InputState::default() }
+        InputState {
+            throttle: true,
+            ..InputState::default()
+        }
     }
 
     #[test]
     fn brake_from_forward_then_reverses() {
-        let mut car = CarState { speed: 18.0, ..CarState::default() };
+        let mut car = CarState {
+            speed: 18.0,
+            ..CarState::default()
+        };
         // Holding down decelerates while rolling forward...
         car.step(down(), MAX, 1);
-        assert!(car.speed < 18.0, "braking should slow the car, got {}", car.speed);
+        assert!(
+            car.speed < 18.0,
+            "braking should slow the car, got {}",
+            car.speed
+        );
         // ...and eventually drives in reverse once stopped.
         car.step(down(), MAX, 240);
         assert!(car.speed < -2.0, "should reverse, got {}", car.speed);
@@ -174,7 +187,11 @@ mod tests {
             car.speed,
             -reverse_limit
         );
-        assert!(car.speed < -4.0, "should be solidly reversing, got {}", car.speed);
+        assert!(
+            car.speed < -4.0,
+            "should be solidly reversing, got {}",
+            car.speed
+        );
     }
 
     #[test]
@@ -182,7 +199,11 @@ mod tests {
         let mut car = CarState::default();
         car.step(up(), MAX, 600);
         assert!(car.speed <= MAX + 0.01, "exceeded max speed: {}", car.speed);
-        assert!(car.speed > MAX - 2.0, "should approach max speed, got {}", car.speed);
+        assert!(
+            car.speed > MAX - 2.0,
+            "should approach max speed, got {}",
+            car.speed
+        );
 
         // A lower cap holds the car slower.
         let mut slow = CarState::default();

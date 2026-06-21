@@ -98,7 +98,13 @@ impl Painter {
             blitz_paint::paint_scene(&mut scene, document, scale, self.width, self.height, 0, 0);
             paint_input_selections(&mut scene, input_selections, scale);
             paint_input_carets(&mut scene, input_carets, scale);
-            crate::scrollbar::paint_scrollbars(&mut scene, document, scrollbars, scale, theme_override);
+            crate::scrollbar::paint_scrollbars(
+                &mut scene,
+                document,
+                scrollbars,
+                scale,
+                theme_override,
+            );
             crate::spinner::paint_number_spinners(&mut scene, number_spinners, scale);
         }
 

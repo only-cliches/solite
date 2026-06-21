@@ -681,7 +681,9 @@ mod tests {
 
         let slice = buffer.slice(..);
         slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
         let data = slice.get_mapped_range();
 
         let mut pixels = Vec::with_capacity((width * height * 4) as usize);

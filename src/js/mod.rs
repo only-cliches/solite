@@ -30,17 +30,22 @@ const SOLID_JS_RUNTIME: &str = r#"export { createEffect, createMemo, createSigna
 
 const DEFAULT_JOB_BUDGET: u32 = 256;
 const MODULE_PATTERNS: [&str; 6] = ["{}.js", "{}.mjs", "{}.jsx", "{}.ts", "{}.tsx", "{}.css"];
-const ENTRYPOINTS: [&str; 10] = [
+const ENTRYPOINTS: [&str; 15] = [
     "index.tsx",
     "app.tsx",
+    "main.tsx",
     "index.jsx",
     "app.jsx",
+    "main.jsx",
     "index.ts",
     "app.ts",
+    "main.ts",
     "index.js",
     "app.js",
+    "main.js",
     "index.mjs",
     "app.mjs",
+    "main.mjs",
 ];
 
 #[derive(Debug, Clone)]
@@ -423,8 +428,13 @@ impl JsContext {
             let bytes = component_source.as_bytes().to_vec();
             let module = Module::declare(ctx.clone(), module_path, bytes)
                 .map_err(|err| {
+                    let caught = ctx.catch();
+                    let detail = caught
+                        .as_exception()
+                        .and_then(|e| e.message())
+                        .unwrap_or_else(|| format!("{:?}", caught));
                     JsContextError::MountError(format!(
-                        "failed to declare module '{module_path}': {err}",
+                        "failed to declare module '{module_path}': {err} [caught: {detail}]",
                     ))
                 })?;
 

@@ -61,7 +61,8 @@ fn main() {
     .expect("create instance");
     let _ = instance.tick();
     let _ = instance.render();
-    if let Err(err) = capture_texture_to_png(&device, &queue, instance.texture(), output.as_path()) {
+    if let Err(err) = capture_texture_to_png(&device, &queue, instance.texture(), output.as_path())
+    {
         eprintln!("failed to capture frame: {err}");
         std::process::exit(1);
     }

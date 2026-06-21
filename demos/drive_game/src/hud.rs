@@ -305,8 +305,8 @@ mod tests {
 
     #[test]
     fn slider_press_updates_max_speed() {
-        use solite::winit::WinitEventTarget;
         use solite::MouseButton;
+        use solite::winit::WinitEventTarget;
 
         let gpu = pollster::block_on(GpuContext::headless()).expect("headless gpu");
         let width = 1280;
@@ -333,7 +333,15 @@ mod tests {
         // range, i.e. ~35 mph.
         let x = (width as f32) - 26.0 - 48.0;
         let y = (98.0 + 268.0) / 2.0;
-        hud.dispatch_mouse(x, y, MouseEvent::Down { x, y, button: MouseButton::Left });
+        hud.dispatch_mouse(
+            x,
+            y,
+            MouseEvent::Down {
+                x,
+                y,
+                button: MouseButton::Left,
+            },
+        );
         hud.poll_events();
 
         assert!(
@@ -345,8 +353,8 @@ mod tests {
 
     #[test]
     fn slider_drag_tracks_pointer_off_the_track() {
-        use solite::winit::WinitEventTarget;
         use solite::MouseButton;
+        use solite::winit::WinitEventTarget;
 
         let gpu = pollster::block_on(GpuContext::headless()).expect("headless gpu");
         let width = 1280;
@@ -366,7 +374,15 @@ mod tests {
 
         // Press the slider near its top (~58 mph) to begin a drag.
         let sx = (width as f32) - 26.0 - 48.0;
-        hud.dispatch_mouse(sx, 108.0, MouseEvent::Down { x: sx, y: 108.0, button: MouseButton::Left });
+        hud.dispatch_mouse(
+            sx,
+            108.0,
+            MouseEvent::Down {
+                x: sx,
+                y: 108.0,
+                button: MouseButton::Left,
+            },
+        );
         hud.poll_events();
         // Let the full-screen capture overlay mount.
         hud.update_state(CarState::default(), 60.0, 16.67);
@@ -385,7 +401,15 @@ mod tests {
         );
 
         // Releasing ends the drag: a later move no longer changes the value.
-        hud.dispatch_mouse(220.0, 600.0, MouseEvent::Up { x: 220.0, y: 600.0, button: MouseButton::Left });
+        hud.dispatch_mouse(
+            220.0,
+            600.0,
+            MouseEvent::Up {
+                x: 220.0,
+                y: 600.0,
+                button: MouseButton::Left,
+            },
+        );
         hud.poll_events();
         hud.update_state(CarState::default(), 60.0, 16.67);
         hud.tick();
@@ -416,7 +440,11 @@ mod tests {
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("hud"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -461,12 +489,18 @@ mod tests {
                     rows_per_image: Some(height),
                 },
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
         queue.submit([encoder.finish()]);
         let slice = buffer.slice(..);
         slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
         let data = slice.get_mapped_range();
         let mut pixels = Vec::with_capacity((width * height * 4) as usize);
         for row in 0..height {
@@ -484,13 +518,36 @@ mod tests {
         let width = 1280u32;
         let height = 720u32;
         let blit = solite::gpu::BlitContext::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
-        let mut hud = Hud::new(device.clone(), queue.clone(), width, height, 1.0, CarState::default())
-            .expect("mount hud");
+        let mut hud = Hud::new(
+            device.clone(),
+            queue.clone(),
+            width,
+            height,
+            1.0,
+            CarState::default(),
+        )
+        .expect("mount hud");
 
         hud.max_speed_mph = 50.0;
-        let high = render_hud_pixels(&mut hud, &device, &queue, &blit, CarState::default(), width, height);
+        let high = render_hud_pixels(
+            &mut hud,
+            &device,
+            &queue,
+            &blit,
+            CarState::default(),
+            width,
+            height,
+        );
         hud.max_speed_mph = 20.0;
-        let low = render_hud_pixels(&mut hud, &device, &queue, &blit, CarState::default(), width, height);
+        let low = render_hud_pixels(
+            &mut hud,
+            &device,
+            &queue,
+            &blit,
+            CarState::default(),
+            width,
+            height,
+        );
 
         // Count differing pixels inside the slider card region. If the fill and
         // handle are reactive, the two renders differ substantially there.
@@ -537,19 +594,27 @@ mod tests {
             brake: 1.0,
         };
 
-        let mut hud = Hud::new(device.clone(), queue.clone(), width, height, 1.0, car)
-            .expect("mount hud");
+        let mut hud =
+            Hud::new(device.clone(), queue.clone(), width, height, 1.0, car).expect("mount hud");
         hud.update_state(car, 60.0, 16.67);
         hud.tick();
         let _ = hud.draw(); // layout pass so the slider press hit-tests
 
         // Drag the max-speed slider down to ~32 mph.
         {
-            use solite::winit::WinitEventTarget;
             use solite::MouseButton;
+            use solite::winit::WinitEventTarget;
             let x = (width as f32) - 26.0 - 48.0;
             let y = 215.0;
-            hud.dispatch_mouse(x, y, MouseEvent::Down { x, y, button: MouseButton::Left });
+            hud.dispatch_mouse(
+                x,
+                y,
+                MouseEvent::Down {
+                    x,
+                    y,
+                    button: MouseButton::Left,
+                },
+            );
             hud.poll_events();
         }
         hud.update_state(car, 60.0, 16.67);
@@ -640,22 +705,12 @@ mod tests {
 
         // Zoomed crop of the telemetry card for legibility checks.
         let tele = image::imageops::crop_imm(&img, 0, 0, 420, 380).to_image();
-        let tele = image::imageops::resize(
-            &tele,
-            840,
-            760,
-            image::imageops::FilterType::Nearest,
-        );
+        let tele = image::imageops::resize(&tele, 840, 760, image::imageops::FilterType::Nearest);
         tele.save("/tmp/drive_game_tele.png").expect("save tele");
 
         // Zoomed crop of the controls + minimap (right side).
         let side = image::imageops::crop_imm(&img, 900, 0, 380, 720).to_image();
-        let side = image::imageops::resize(
-            &side,
-            760,
-            1440,
-            image::imageops::FilterType::Nearest,
-        );
+        let side = image::imageops::resize(&side, 760, 1440, image::imageops::FilterType::Nearest);
         side.save("/tmp/drive_game_side.png").expect("save side");
     }
 }

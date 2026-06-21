@@ -9,7 +9,7 @@ use blitz_traits::shell::{ClipboardError, ShellProvider};
 use serde_json::json;
 use solite::winit::{WinitBridge, WinitPollScheduler};
 use solite::{
-    Event, InstanceConfig, Scene, SurfaceRect, TickResult,
+    Event, InstanceConfig, Scene, StylesheetId, SurfaceRect, TickResult,
     capture::{build_capture_path, capture_path_from_cli, capture_texture_to_png},
     gpu::{BlitDraw, present_to_surface},
     workflow::{ReloadAction, SourceProject, SourceProjectWatch},
@@ -34,6 +34,7 @@ struct DemoProject {
 struct RenderTargetData {
     label: String,
     rx: tokio::sync::mpsc::UnboundedReceiver<Event>,
+    stylesheet_id: StylesheetId,
 }
 
 struct App {
@@ -165,14 +166,27 @@ impl App {
                 let Some(project) = self.project.as_ref() else {
                     return false;
                 };
+                let stylesheet_path = kitchen_sink_styles_path(&project.source);
                 let mut changed = false;
-                for surface in self.scene.surfaces_mut() {
-                    if project
-                        .source
-                        .reload_imported_css(&mut surface.instance, &paths)
-                    {
-                        let _ = surface.instance.tick();
-                        changed = true;
+                if paths.iter().any(|path| path == &stylesheet_path) {
+                    match load_kitchen_sink_stylesheet(&project.source) {
+                        Ok(css) => {
+                            for surface in self.scene.surfaces_mut() {
+                                if surface
+                                    .instance
+                                    .replace_stylesheet(surface.data.stylesheet_id, &css)
+                                {
+                                    let _ = surface.instance.tick();
+                                    changed = true;
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!(
+                                "[{PROJECT_NAME}] failed to reload stylesheet {}: {err}",
+                                stylesheet_path.display()
+                            );
+                        }
                     }
                 }
                 changed
@@ -486,6 +500,14 @@ fn create_demo_project() -> io::Result<DemoProject> {
     })
 }
 
+fn kitchen_sink_styles_path(source: &SourceProject) -> PathBuf {
+    source.source_dir().join("styles.css")
+}
+
+fn load_kitchen_sink_stylesheet(source: &SourceProject) -> io::Result<String> {
+    std::fs::read_to_string(kitchen_sink_styles_path(source))
+}
+
 fn mount_targets(
     source: &SourceProject,
     layouts: &[(u32, u32)],
@@ -497,11 +519,12 @@ fn mount_targets(
     birds_bytes: &[u8],
 ) -> io::Result<Scene<RenderTargetData>> {
     let mut scene = Scene::new();
+    let stylesheet = load_kitchen_sink_stylesheet(source)?;
 
     for (index, &(x, width)) in layouts.iter().enumerate() {
         let label = labels.get(index).copied().unwrap_or("Target");
 
-        let (instance, rx) = source
+        let (mut instance, rx) = source
             .mount_live(InstanceConfig {
                 width,
                 height,
@@ -526,6 +549,7 @@ fn mount_targets(
                 scale_factor,
             })
             .map_err(|err| io::Error::other(err.to_string()))?;
+        let stylesheet_id = instance.add_stylesheet(&stylesheet);
         instance.set_shell_provider(Arc::new(SystemClipboard));
 
         scene.add_surface(
@@ -534,6 +558,7 @@ fn mount_targets(
             RenderTargetData {
                 label: label.to_string(),
                 rx,
+                stylesheet_id,
             },
         );
     }

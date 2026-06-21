@@ -172,7 +172,9 @@ fn draw_range_slider(
     let cy = (content_box.y0 + content_box.y1) / 2.0;
     // content_box is in physical pixels; caps must scale with DPI so the thumb
     // keeps the same apparent CSS-pixel size at any device pixel ratio.
-    let thumb_r = (content_box.height() / 2.0).min(8.0 * scale).max(3.0 * scale);
+    let thumb_r = (content_box.height() / 2.0)
+        .min(8.0 * scale)
+        .max(3.0 * scale);
     let track_h = (thumb_r * 0.45).max(2.0 * scale);
 
     // Clamp track horizontally so the thumb never extends outside content_box.

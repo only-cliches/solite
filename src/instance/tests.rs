@@ -1485,8 +1485,14 @@ fn uncalled_function_attribute_emits_dev_warning() {
             )
             .unwrap_or(false);
     });
-    assert!(count >= 1, "expected a dev warning for style={{fn}}, got {count}");
-    assert!(mentions_style, "warning should name the offending `style` attribute");
+    assert!(
+        count >= 1,
+        "expected a dev warning for style={{fn}}, got {count}"
+    );
+    assert!(
+        mentions_style,
+        "warning should name the offending `style` attribute"
+    );
 }
 
 /// Regression: kitchen_sink panicked at blitz-dom/src/stylo.rs:84

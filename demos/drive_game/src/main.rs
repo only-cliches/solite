@@ -181,12 +181,12 @@ impl App {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = gpu
-            .context
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("drive game frame encoder"),
-            });
+        let mut encoder =
+            gpu.context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("drive game frame encoder"),
+                });
 
         renderer.render(
             &gpu.context.queue,

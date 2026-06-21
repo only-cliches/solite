@@ -1,6 +1,6 @@
-use rquickjs::{Ctx, Result as JsResult};
 #[cfg(debug_assertions)]
 use rquickjs::Function;
+use rquickjs::{Ctx, Result as JsResult};
 
 /// Install `__sol_dev_warn(message)` — a stderr diagnostic channel the runtime
 /// uses to flag likely developer mistakes (e.g. a function passed to a reactive
@@ -35,9 +35,7 @@ mod tests {
         let ctx = Context::full(&rt).unwrap();
         ctx.with(|ctx| {
             super::install(ctx.clone()).unwrap();
-            let is_fn: bool = ctx
-                .eval("typeof __sol_dev_warn === 'function'")
-                .unwrap();
+            let is_fn: bool = ctx.eval("typeof __sol_dev_warn === 'function'").unwrap();
             assert!(is_fn, "__sol_dev_warn should be installed in debug builds");
             // Calling it must not throw.
             let _: rquickjs::Value = ctx.eval("__sol_dev_warn('hello from test')").unwrap();

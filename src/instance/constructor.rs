@@ -167,12 +167,7 @@ impl Instance {
         )?;
 
         // --- render targets ---
-        let render_targets = create_render_targets(
-            &device,
-            &queue,
-            phys_w,
-            phys_h,
-        );
+        let render_targets = create_render_targets(&device, &queue, phys_w, phys_h);
 
         let instance = Self {
             width,
@@ -241,7 +236,7 @@ impl Instance {
     /// Create a new instance from a component file or source root directory.
     ///
     /// If `component_path` is a file, it is loaded directly. If it is a
-    /// directory, the loader looks for `index.tsx` or `app.tsx` (and the
+    /// directory, the loader looks for `index.tsx`, `app.tsx`, or `main.tsx` (and the
     /// matching `.jsx`, `.ts`, `.js`, and `.mjs` variants) in that directory
     /// and mounts the first match.
     ///
@@ -355,12 +350,7 @@ impl Instance {
         )?;
 
         // --- render targets ---
-        let render_targets = create_render_targets(
-            &device,
-            &queue,
-            phys_w,
-            phys_h,
-        );
+        let render_targets = create_render_targets(&device, &queue, phys_w, phys_h);
 
         let instance = Self {
             width,
@@ -399,7 +389,7 @@ impl Instance {
     /// Create a new instance from a component file or source root directory.
     ///
     /// If `component_path` is a file, it is loaded directly. If it is a
-    /// directory, the loader looks for `index.tsx` or `app.tsx` (and the
+    /// directory, the loader looks for `index.tsx`, `app.tsx`, or `main.tsx` (and the
     /// matching `.jsx`, `.ts`, `.js`, and `.mjs` variants) in that directory
     /// and mounts the first match.
     ///
@@ -415,7 +405,7 @@ impl Instance {
     /// Create a new instance from a component file or source root directory.
     ///
     /// If `component_path` is a file, it is loaded directly. If it is a
-    /// directory, the loader looks for `index.tsx` or `app.tsx` (and the
+    /// directory, the loader looks for `index.tsx`, `app.tsx`, or `main.tsx` (and the
     /// matching `.jsx`, `.ts`, `.js`, and `.mjs` variants) in that directory
     /// and mounts the first match.
     ///
@@ -449,7 +439,7 @@ impl Instance {
     /// Create a new instance from a virtual file list.
     ///
     /// The file paths are resolved relative to the virtual project root. The
-    /// loader looks for `index.tsx` or `app.tsx` (and matching `.jsx`, `.ts`,
+    /// loader looks for `index.tsx`, `app.tsx`, or `main.tsx` (and matching `.jsx`, `.ts`,
     /// `.js`, and `.mjs` variants) in the provided list and mounts the first
     /// match.
     fn new_from_virtual_files_inner(
@@ -558,12 +548,7 @@ impl Instance {
         )?;
 
         // --- render targets ---
-        let render_targets = create_render_targets(
-            &device,
-            &queue,
-            phys_w,
-            phys_h,
-        );
+        let render_targets = create_render_targets(&device, &queue, phys_w, phys_h);
 
         let instance = Self {
             width,
@@ -602,7 +587,7 @@ impl Instance {
     /// Create a new instance from a virtual file list.
     ///
     /// The file paths are resolved relative to the virtual project root. The
-    /// loader looks for `index.tsx` or `app.tsx` (and matching `.jsx`, `.ts`,
+    /// loader looks for `index.tsx`, `app.tsx`, or `main.tsx` (and matching `.jsx`, `.ts`,
     /// `.js`, and `.mjs` variants) in the provided list and mounts the first
     /// match.
     #[cfg(not(test))]
@@ -616,7 +601,7 @@ impl Instance {
     /// Create a new instance from a virtual file list.
     ///
     /// The file paths are resolved relative to the virtual project root. The
-    /// loader looks for `index.tsx` or `app.tsx` (and matching `.jsx`, `.ts`,
+    /// loader looks for `index.tsx`, `app.tsx`, or `main.tsx` (and matching `.jsx`, `.ts`,
     /// `.js`, and `.mjs` variants) in the provided list and mounts the first
     /// match.
     #[cfg(test)]
